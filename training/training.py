@@ -3,8 +3,8 @@ import os
 import torch
 from torch import nn, optim
 from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 from accelerate import Accelerator
 
 
@@ -13,23 +13,27 @@ from clip.model import CLIP
 from clip.dataset import STS
 from clip.validation import ImageNetValidator, CosineSimValidator
 
-from torchdata.datapipes.iter import FileLister, FileOpener
-from torchdata.dataloader2 import DataLoader2, MultiProcessingReadingService, DistributedReadingService, SequentialReadingService
-from torch.utils.data.datapipes.iter.sharding import SHARDING_PRIORITIES
+from torchdata.datapipes.iter import FileOpener
+from torch.utils.data import DataLoader
 
 from argparse import ArgumentParser
 from tqdm import tqdm
 from PIL import Image
 
 from braceexpand import braceexpand
-
 import time
+
+
+def collate_fn(batch):
+    print(batch)
+
+    return batch
 
 class Trainer:
 
     # Init takes a clip model and a dataset
     def __init__(self, model, preprocess, epochs, data_path):
-        self.iterationPerEpoch = 10
+        self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
         maxlr = 5e-4
@@ -37,38 +41,31 @@ class Trainer:
 
         self.preprocess = preprocess
 
-        self.accelerator = Accelerator(step_scheduler_with_optimizer=False)
-
-
+        self.accelerator = Accelerator(step_scheduler_with_optimizer=True)
         if self.accelerator.is_local_main_process: self.writer = SummaryWriter(log_dir="outputs/runs") 
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=maxlr, betas=(0.9,0.98), eps=1e-6, weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
-        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
 
-        braceString = data_path + "/{00000..05000}.tar"
-
+        braceString = data_path + "/{00000..10000}.tar"
         datasetLength = getDatasetSize(braceString)
-        dp = FileLister(list(braceexpand(braceString)))
-        dp = FileOpener(dp, mode="b") 
+        dp = FileOpener(list(braceexpand(braceString)), mode="b") 
         dp = dp.load_from_tar(length=datasetLength).webdataset()
         dp = dp.shuffle().sharding_filter()
-        dp.apply_sharding(self.accelerator.num_processes, self.accelerator.process_index, sharding_group=SHARDING_PRIORITIES.DISTRIBUTED)
+        dp.apply_sharding(self.accelerator.num_processes, self.accelerator.process_index) 
         dp = dp.map(self.decode)
         dp = dp.batch(batch_size=batch_size, drop_last=True)
-
         self.numBatches = len(dp)
+        self.trainLoader = DataLoader(dp, num_workers=8) 
 
-        service = [DistributedReadingService(), MultiProcessingReadingService(num_workers=2)]
-        reading_service = SequentialReadingService(*service)
-        self.trainLoader = DataLoader2(dp, reading_service=reading_service)
-
+        self.scheduler = CosineAnnealingWarmupRestarts(self.optimizer, self.epochs * min(self.iterationPerEpoch, self.numBatches), max_lr=maxlr, warmup_steps=2000) #CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
+        
         self.model, self.optimizer, self.scheduler = self.accelerator.prepare(self.model, self.optimizer, self.scheduler)
         self.accelerator.free_memory()
 
         if self.accelerator.is_local_main_process: print(f"The dataset contains {datasetLength} pairs of images and texts.")
 
-        if self.accelerator.is_local_main_process: self.imageNetValidator = ImageNetValidator(self.model.module, self.preprocess, self.accelerator.device, self.writer)
-        if self.accelerator.is_local_main_process: self.cosineValidator = CosineSimValidator(self.model.module, self.accelerator.device, self.writer)
+        if self.accelerator.is_local_main_process: self.imageNetValidator = ImageNetValidator(self, self.preprocess, self.accelerator.device, self.writer)
+        if self.accelerator.is_local_main_process: self.cosineValidator = CosineSimValidator(self, self.accelerator.device, self.writer)
 
         self.accelerator.wait_for_everyone()
 
@@ -84,9 +81,10 @@ class Trainer:
             for idx, batch in enumerate(tqdm(self.trainLoader, disable=not self.accelerator.is_local_main_process, total=self.numBatches, miniters=20, mininterval=30, desc=f"Epoch {epoch}")):                
                 # startTime = time.time()
                 images, texts = list(zip(*batch))
+                texts = [text[0] for text in texts]
 
                 texts = clip.tokenize(texts, truncate=True).to(self.accelerator.device)
-                images:torch.Tensor = torch.stack(images).to(self.accelerator.device)
+                images:torch.Tensor = torch.stack(images).squeeze().to(self.accelerator.device)
 
                 image_features, text_features, logit_scale = self.model(images, texts)
 
@@ -106,20 +104,18 @@ class Trainer:
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
+                # self.scheduler.step()
 
                 # print(f"Step took {time.time() - startTime} seconds")
 
-                if idx >= self.iterationPerEpoch: 
-                    # self.trainLoader.shutdown()
-                    break
+                if idx > self.iterationPerEpoch: break
 
+                if self.accelerator.is_local_main_process: 
+                    self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=epoch * self.numBatches + idx)
+                    self.writer.add_scalar("Loss", total_loss.item(), global_step=epoch * self.numBatches + idx)
 
-            self.scheduler.step()
-
-            if self.accelerator.is_local_main_process: 
-                self.writer.add_scalar("Loss", total_loss.item(), global_step=epoch)
-                self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=epoch)
             self.validate(epoch)
+
 
     def validate(self, step):
         if self.accelerator.is_local_main_process:
@@ -127,25 +123,12 @@ class Trainer:
             self.cosineValidator.validate(step, self.accelerator.is_main_process)
 
     def decode(self, x):
-   
         image = x[".jpg"]
         text = x[".txt"].read().decode("utf-8")
         image = self.preprocess(Image.open(image))
 
         return image, text
 
-        images = []
-        texts = []
-
-        for x in batch:
-            image = x[".jpg"]
-            text = x[".txt"].read().decode("utf-8")
-            image = self.preprocess(Image.open(image))
-            images.append(image)
-            texts.append(text)
-
-        images = torch.stack(images)
-        return images, texts
     
     def save_model(self, savePath=None):
         savePath = savePath if savePath else os.path.join(self.runDirectory, "checkpoints")
@@ -187,6 +170,6 @@ if __name__ == "__main__":
 
     trainer = Trainer(model, preprocess, epochs=32, data_path=args.data_path)
 
-    # trainer.validate(step=-1)
+    trainer.validate(step=-1)
 
     trainer.train()

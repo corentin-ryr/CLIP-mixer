@@ -12,12 +12,13 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 from clip.dataset import STS
 
 class ImageNetValidator():
-    def __init__(self, model, preprocess, device, writer) -> None:
+    def __init__(self, trainer, preprocess, device, writer) -> None:
 
-        self.model = model
+        self.trainer = trainer
         self.device = device
         self.writer = writer
 
@@ -123,7 +124,7 @@ class ImageNetValidator():
                 texts = [template.format(classname) for template in templates] #format with class
                 texts = clip.tokenize(texts).to(self.device) #tokenize
 
-                class_embeddings = self.model.encode_text(texts) #embed with text encoder
+                class_embeddings = self.trainer.model.module.encode_text(texts) #embed with text encoder
                 class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)
                 class_embedding = class_embeddings.mean(dim=0)
                 class_embedding /= class_embedding.norm()
@@ -138,7 +139,7 @@ class ImageNetValidator():
     
 
     def validate(self, step, verbose=False):
-        self.model.eval()
+        self.trainer.model.eval()
 
         with torch.no_grad():
             top1, top5, n = 0., 0., 0.
@@ -147,7 +148,7 @@ class ImageNetValidator():
                 target = target.cuda()
                 
                 # predict
-                image_features = self.model.encode_image(images)
+                image_features = self.trainer.model.module.encode_image(images)
                 image_features /= image_features.norm(dim=-1, keepdim=True)
                 logits = 100. * image_features @ self.zeroshot_weights
 
@@ -172,9 +173,9 @@ class ImageNetValidator():
     
 
 class CosineSimValidator():
-    def __init__(self, model, device, writer) -> None:
+    def __init__(self, trainer, device, writer) -> None:
 
-        self.model = model
+        self.trainer = trainer
         self.device = device
         self.writer = writer
 
@@ -182,7 +183,7 @@ class CosineSimValidator():
 
 
     def validate(self, step, verbose=False):
-        self.model.eval()
+        self.trainer.model.eval()
 
         linfSimilarities = []
         l2Similarities = []
@@ -195,8 +196,8 @@ class CosineSimValidator():
             text2 = clip.tokenize(text2, truncate=True).to(self.device)
 
             with torch.no_grad():
-                text_features_1 = self.model.encode_text(text1)
-                text_features_2 = self.model.encode_text(text2)
+                text_features_1 = self.trainer.model.module.encode_text(text1)
+                text_features_2 = self.trainer.model.module.encode_text(text2)
           
             linfSim = torch.max(torch.abs(text_features_1 - text_features_2), dim=1)[0]
             cosineSim = F.cosine_similarity(text_features_1, text_features_2)

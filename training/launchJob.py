@@ -38,7 +38,7 @@ compute_target = "A100MultiNode"
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_test_18400_testTime"
+jobName = "clip_test_18400_fullepoch_27m"
 
 dataset = datasets["laion-coco-images"]
 
@@ -86,7 +86,7 @@ command_job = command(
     },
     compute=computes[compute_target]["name"],
     experiment_name=exp_name,
-    docker_args="--shm-size=150g",
+    docker_args="--shm-size=200g",
     display_name=jobName,
     instance_count=computes[compute_target]["num_machine"],
     distribution=PyTorchDistribution(
