@@ -16,6 +16,11 @@ computes = {
         "num_machine": 1,
         "num_process": 4,
     },
+    "A100SingleGPU": {
+        "name": "A100Single",
+        "num_machine": 1,
+        "num_process": 1,
+    },
 }
 
 
@@ -31,18 +36,29 @@ computes = {
 # command_to_run = "./generateDataset.sh ${{inputs.data_path}} ${{outputs.output}}"
 
 
-# Preset CLIP =======================================
-compute_target = "A100SingleNode"
-compute_target = "A100MultiNode"
+# Preset CLIP test =======================================
+compute_target = "A100SingleGPU"
 
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_test_18400_fullepoch_27m"
+jobName = "clip_test_18400_testLoss"
 
 dataset = datasets["laion-coco-images"]
 
 command_to_run = f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}" + (" --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT" if computes[compute_target]["num_machine"] > 1 else "") + " training.py --data-path ${{inputs.data_path}}"
+
+# Preset CLIP full training =======================================
+# compute_target = "A100MultiNode"
+
+# environment = "clipTraining"
+
+# exp_name = "clip"
+# jobName = "clip_test_18400_testLoss"
+
+# dataset = datasets["laion-coco-images"]
+
+# command_to_run = f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}" + (" --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT" if computes[compute_target]["num_machine"] > 1 else "") + " training.py --data-path ${{inputs.data_path}}"
 
 # =========================================================================================== #
 
