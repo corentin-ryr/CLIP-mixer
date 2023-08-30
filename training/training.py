@@ -34,7 +34,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 5e-4
+        maxlr = 5e-4 / 10
         batch_size = 4096
 
         self.preprocess = preprocess
@@ -44,7 +44,7 @@ class Trainer:
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=maxlr, betas=(0.9,0.98), eps=1e-6, weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        braceString = data_path + "/{00000..00001}.tar" # "/{00000..16667}.tar"
+        braceString = data_path + "/{00000..16667}.tar" # "/{00000..00001}.tar" #
         datasetLength = getDatasetSize(braceString)
         dp = FileOpener(list(braceexpand(braceString)), mode="b") 
         dp = dp.load_from_tar(length=datasetLength).webdataset()
@@ -57,7 +57,8 @@ class Trainer:
         self.numBatches = len(dp)
         self.trainLoader = DataLoader2(dp) 
 
-        self.scheduler = CosineAnnealingWarmupRestarts(self.optimizer, self.epochs * min(self.iterationPerEpoch, self.numBatches), max_lr=maxlr, min_lr=maxlr/100, warmup_steps=20) #CosineAnnealingLR(self.optimizer, T_max=self.epochs, eta_min=1e-6)
+        self.scheduler = CosineAnnealingWarmupRestarts(self.optimizer, self.epochs * min(self.iterationPerEpoch, self.numBatches) * self.accelerator.num_processes, 
+                                                       max_lr=maxlr, min_lr=maxlr/100, warmup_steps=2000 * self.accelerator.num_processes)
         
         self.model, self.optimizer, self.scheduler = self.accelerator.prepare(self.model, self.optimizer, self.scheduler)
         self.accelerator.free_memory()
@@ -90,7 +91,6 @@ class Trainer:
             if self.currentStep > 0: dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep)
             else: dataloader = self.trainLoader
 
-            print(len(dataloader))
 
             for idx, batch in enumerate(tqdm(dataloader, disable=not self.accelerator.is_local_main_process, total=self.numBatches - self.currentStep, miniters=20, mininterval=30, desc=f"Epoch {epoch}")):                
                 images, texts = list(zip(*batch))
@@ -122,7 +122,7 @@ class Trainer:
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                # self.scheduler.step()
+                self.scheduler.step()
 
                 # print(f"Step took {time.time() - startTime} seconds")
 
@@ -183,6 +183,7 @@ class Trainer:
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--data-path", type=str, default="C:/Users/royc/Documents/DeduplicationSourceCode/Data/STS-b/laion-coco-images")
+    parser.add_argument("--epochs", type=int, default=32)
     return parser.parse_args()
 
     
@@ -204,7 +205,7 @@ if __name__ == "__main__":
                  transformer_layers=12, transformer_width=512, transformer_heads=8, vocab_size=49408, context_length=77)
     preprocess = clip._transform(model.visual.input_resolution)
 
-    trainer = Trainer(model, preprocess, epochs=32, data_path=args.data_path)
+    trainer = Trainer(model, preprocess, epochs=args.epochs, data_path=args.data_path)
 
     trainer.validate(step=-1)
 
