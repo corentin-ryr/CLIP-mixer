@@ -1,5 +1,8 @@
 import json
 import os
+from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
+import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.tensorboard import SummaryWriter
@@ -34,7 +37,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 5e-4 / 10
+        maxlr = 5e-4 / 20
         batch_size = 4096
 
         self.preprocess = preprocess
@@ -44,7 +47,7 @@ class Trainer:
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=maxlr, betas=(0.9,0.98), eps=1e-6, weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        braceString = data_path + "/{00000..16667}.tar" # "/{00000..00001}.tar" #
+        braceString = data_path + "/00000.tar" # "/{00000..16667}.tar" #
         datasetLength = getDatasetSize(braceString)
         dp = FileOpener(list(braceexpand(braceString)), mode="b") 
         dp = dp.load_from_tar(length=datasetLength).webdataset()
@@ -58,9 +61,10 @@ class Trainer:
         self.trainLoader = DataLoader2(dp) 
 
         self.scheduler = CosineAnnealingWarmupRestarts(self.optimizer, self.epochs * min(self.iterationPerEpoch, self.numBatches) * self.accelerator.num_processes, 
-                                                       max_lr=maxlr, min_lr=maxlr/100, warmup_steps=2000 * self.accelerator.num_processes)
+                                                       max_lr=maxlr, min_lr=maxlr/100, warmup_steps=20 * self.accelerator.num_processes)
         
         self.model, self.optimizer, self.scheduler = self.accelerator.prepare(self.model, self.optimizer, self.scheduler)
+        # self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
         self.accelerator.free_memory()
 
         if self.accelerator.is_local_main_process: print(f"The dataset contains {datasetLength} pairs of images and texts.")
@@ -68,11 +72,13 @@ class Trainer:
         if self.accelerator.is_local_main_process: self.imageNetValidator = ImageNetValidator(self, self.preprocess, self.accelerator.device, self.writer)
         if self.accelerator.is_local_main_process: self.cosineValidator = CosineSimValidator(self, self.accelerator.device, self.writer)
 
-        if os.path.exists(os.path.join("outputs", "checkpoints")): 
+        if os.path.exists(os.path.join("outputs", "checkpoints")):
             epoch, step = self.load_model()
-            self.scheduler.step(epoch * self.numBatches + step)
+            # self.scheduler.step(epoch * self.numBatches + step)
             self.currentEpoch = epoch
             self.currentStep = step
+
+            print(f"Loaded model from epoch {epoch} and step {step}")
         else:
             self.currentEpoch = 0
             self.currentStep = 0
@@ -93,6 +99,8 @@ class Trainer:
 
 
             for idx, batch in enumerate(tqdm(dataloader, disable=not self.accelerator.is_local_main_process, total=self.numBatches - self.currentStep, miniters=20, mininterval=30, desc=f"Epoch {epoch}")):                
+                global_step = epoch * self.numBatches + idx
+                
                 images, texts = list(zip(*batch))
                 texts = [text[0] for text in texts]
 
@@ -103,10 +111,12 @@ class Trainer:
 
                 image_features_gathered = self.accelerator.gather(image_features.detach())
                 text_features_gathered = self.accelerator.gather(text_features.detach())
+                image_features_gathered.requires_grad = True
+                text_features_gathered.requires_grad = True
 
                 # cosine similarity as logits
-                logits_per_image = logit_scale * image_features @ text_features_gathered.t()
                 logits_per_text = logit_scale * text_features @ image_features_gathered.t()
+                logits_per_image = logit_scale * image_features @ text_features_gathered.t()
                 # print(logits_per_image.shape, logits_per_text.shape)
                 # print(torch.min(logits_per_image), torch.max(logits_per_image))
 
@@ -115,10 +125,14 @@ class Trainer:
 
                 self.accelerator.backward(total_loss)
                 # Clamp logit scale to 100
-                if isinstance(self.model, nn.parallel.DistributedDataParallel):
-                    self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
-                else:
-                    self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
+                # if isinstance(self.model, nn.parallel.DistributedDataParallel):
+                #     self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
+                # else:
+                #     self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
+
+                if self.accelerator.is_local_main_process:
+                    ax = plot_grad_flow(self.model.named_parameters())
+                    self.writer.add_figure("Gradient flow", ax.figure, global_step=global_step)
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
@@ -130,15 +144,18 @@ class Trainer:
                     print("Reached iteration limit")
                     break
 
-                global_step = epoch * self.numBatches + idx
                 if self.accelerator.is_local_main_process:
                     self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
                     self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
+
+
                 if global_step % 100 == 99: self.save_model(currentEpoch = epoch, currentStep = idx)
 
             self.currentStep = 0
-            self.validate(epoch)
+            if epoch % 5 == 0: self.validate(epoch)
+
+            if self.accelerator.is_local_main_process: self.writer.flush()
 
 
     def validate(self, step):
@@ -194,6 +211,41 @@ def getDatasetSize(paths):
         length += stats["successes"]
 
     return length
+
+def plot_grad_flow(named_parameters):
+    '''Plots the gradients flowing through different layers in the net during training.
+    Can be used for checking for possible gradient vanishing / exploding problems.
+    
+    Usage: Plug this function in Trainer class after loss.backwards() as 
+    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
+    ave_grads = []
+    max_grads= []
+    layers = []
+    for n, p in named_parameters:
+        if(p.requires_grad) and ("bias" not in n):
+            layers.append(n)
+            ave_grads.append(p.grad.abs().cpu().mean())
+            max_grads.append(p.grad.abs().cpu().max())
+
+    fig, ax = plt.subplots(figsize=(20, 10))
+
+    ax.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+    ax.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+    ax.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
+    ax.set_xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
+    ax.set_xlim(left=0, right=len(ave_grads))
+    ax.set_ylim(bottom = -0.001, top=0.02) # zoom in on the lower gradient regions
+    ax.set_xlabel("Layers")
+    ax.set_ylabel("average gradient")
+    ax.set_title("Gradient flow")
+    ax.grid(True)
+    ax.legend([Line2D([0], [0], color="c", lw=4),
+                Line2D([0], [0], color="b", lw=4),
+                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+    
+    print(max(max_grads), max(ave_grads))
+    
+    return ax
 
 
 if __name__ == "__main__":

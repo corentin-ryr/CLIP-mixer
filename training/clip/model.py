@@ -296,7 +296,7 @@ class CLIP(nn.Module):
         self.ln_final = LayerNorm(transformer_width)
 
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        # self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         num_params = sum(p.numel() for p in self.transformer.parameters()) + sum([self.text_projection.numel(), self.positional_embedding.numel()]) + sum(p.numel() for p in self.token_embedding.parameters())
         print("Number of parameters:", num_params)
@@ -372,7 +372,7 @@ class CLIP(nn.Module):
         text_features = text_features / text_features.norm(dim=1, keepdim=True)
 
         # cosine similarity as logits
-        logit_scale = self.logit_scale.exp()
+        logit_scale = 1 # self.logit_scale.exp()
         # logits_per_image = logit_scale * image_features @ text_features.t()
         # logits_per_text = logits_per_image.t()
 
