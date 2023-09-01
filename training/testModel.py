@@ -3,9 +3,12 @@ from accelerate import Accelerator
 from clip.validation import ImageNetValidator, CosineSimValidator
 from clip import clip
 from clip.model import CLIP
+from torch import backends
 
 class TestModel():
     def __init__(self):
+
+        # self.device = "mps" if backends.mps.is_available() else "cpu"
 
         print("Prepare the model")
         model = CLIP(embed_dim=512, image_resolution=224, vision_layers=12, vision_width=768, vision_patch_size=32,
@@ -33,7 +36,7 @@ class TestModel():
         
 
     def load_model(self):
-        self.accelerator.load_state(os.path.join("outputs", "checkpoints_step700"))
+        self.accelerator.load_state(os.path.join("outputs", "clip_testsave"))
         self.accelerator.wait_for_everyone()
 
 

@@ -1,3 +1,4 @@
+import os
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -110,7 +111,7 @@ class ImageNetValidator():
 
         print(f"{len(self.imagenet_classes)} classes, {len(self.imagenet_templates)} templates")
 
-
+        os.makedirs("datasetImageNet", exist_ok=True)
         images = ImageNetV2Dataset(transform=preprocess, location="datasetImageNet")
         self.loader = DataLoader(images, batch_size=32, num_workers=2)
 
@@ -146,8 +147,8 @@ class ImageNetValidator():
         with torch.no_grad():
             top1, top5, n = 0., 0., 0.
             for i, (images, target) in enumerate(tqdm(self.loader, miniters=20, mininterval=50, desc="Image net validation")):
-                images = images.to("mps")
-                target = target.to("mps")
+                images = images.to(self.device)
+                target = target.to(self.device)
                 
                 # predict
                 if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):

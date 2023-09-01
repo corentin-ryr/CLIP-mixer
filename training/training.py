@@ -25,11 +25,6 @@ from PIL import Image
 from braceexpand import braceexpand
 
 
-def collate_fn(batch):
-    print(batch)
-
-    return batch
-
 class Trainer:
 
     # Init takes a clip model and a dataset
@@ -43,12 +38,11 @@ class Trainer:
         self.preprocess = preprocess
 
         self.accelerator = Accelerator(step_scheduler_with_optimizer=True)
-        if self.accelerator.is_local_main_process: self.writer = SummaryWriter(log_dir="outputs/runs") 
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=maxlr, betas=(0.9,0.98), eps=1e-6, weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        braceString = data_path + "/{00000..16667}.tar" #"/00000.tar" #
-        datasetLength = getDatasetSize(braceString)
+        braceString = data_path + "/{00000..16667}.tar" #"/{00000..00006}.tar" #
+        datasetLength = getDatasetSize(braceString, verbose=self.accelerator.is_local_main_process)
         dp = FileOpener(list(braceexpand(braceString)), mode="b") 
         dp = dp.load_from_tar(length=datasetLength).webdataset()
         dp = dp.shuffle()
@@ -58,28 +52,27 @@ class Trainer:
         dp = dp.map(self.decode)
         dp = dp.batch(batch_size=batch_size, drop_last=True)
         self.numBatches = len(dp)
-        self.trainLoader = DataLoader2(dp) 
+        self.trainLoader = DataLoader(dp) 
 
         self.scheduler = CosineAnnealingWarmupRestarts(self.optimizer, self.epochs * min(self.iterationPerEpoch, self.numBatches) * self.accelerator.num_processes, 
                                                        max_lr=maxlr, min_lr=maxlr/100, warmup_steps=2000 * self.accelerator.num_processes)
         
         self.model, self.optimizer, self.scheduler = self.accelerator.prepare(self.model, self.optimizer, self.scheduler)
 
-        if self.accelerator.is_local_main_process: print(f"The dataset contains {datasetLength} pairs of images and texts.")
+        if self.accelerator.is_local_main_process:
+            print(f"The dataset contains {datasetLength} pairs of images and texts.")
+            self.writer = SummaryWriter(log_dir="outputs/runs")
+            self.imageNetValidator = ImageNetValidator(self, self.preprocess, self.accelerator.device, self.writer)
+            self.cosineValidator = CosineSimValidator(self, self.accelerator.device, self.writer)
 
-        if self.accelerator.is_local_main_process: self.imageNetValidator = ImageNetValidator(self, self.preprocess, self.accelerator.device, self.writer)
-        if self.accelerator.is_local_main_process: self.cosineValidator = CosineSimValidator(self, self.accelerator.device, self.writer)
+        
+        epoch, step = self.load_model()
+        self.scheduler.step(epoch * self.numBatches + step)
+        self.startEpoch = epoch
+        self.currentStep = step
 
-        if os.path.exists(os.path.join("outputs", "checkpoints")):
-            epoch, step = self.load_model()
-            self.scheduler.step(epoch * self.numBatches + step)
-            self.currentEpoch = epoch
-            self.currentStep = step
+        if self.accelerator.is_local_main_process: print(f"Loaded model from epoch {epoch} and step {step}")
 
-            print(f"Loaded model from epoch {epoch} and step {step}")
-        else:
-            self.currentEpoch = 0
-            self.currentStep = 0
 
         self.accelerator.wait_for_everyone()
 
@@ -89,13 +82,10 @@ class Trainer:
         loss_txt = nn.CrossEntropyLoss()
 
         # add your own code to track the training progress.
-        for epoch in range(self.epochs - self.currentEpoch):
+        for epoch in range(self.startEpoch, self.epochs):
             self.model.train()
 
-            if self.currentStep > 0: dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep)
-            else: dataloader = self.trainLoader
-
-
+            dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep)
             for idx, batch in enumerate(tqdm(dataloader, disable=not self.accelerator.is_local_main_process, total=self.numBatches - self.currentStep, miniters=20, mininterval=30, desc=f"Epoch {epoch}")):                
                 global_step = epoch * self.numBatches + idx
                 
@@ -109,8 +99,6 @@ class Trainer:
 
                 image_features_gathered = self.accelerator.gather(image_features.detach())
                 text_features_gathered = self.accelerator.gather(text_features.detach())
-                image_features_gathered.requires_grad = True
-                text_features_gathered.requires_grad = True
 
                 # cosine similarity as logits
                 logits_per_text = logit_scale * text_features @ image_features_gathered.t()
@@ -120,14 +108,13 @@ class Trainer:
                 total_loss = (loss_img(logits_per_image, ground_truth) + loss_txt(logits_per_text, ground_truth)) / 2
 
                 self.accelerator.backward(total_loss)
+
                 # Clamp logit scale to 100
                 if isinstance(self.model, nn.parallel.DistributedDataParallel):
                     self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
                 else:
                     self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
 
-                # if self.accelerator.sync_gradients:
-                #     self.accelerator.clip_grad_norm_(self.model.parameters(), 10)
 
                 if self.accelerator.is_local_main_process and global_step % 100 == 99:
                     ax = plot_grad_flow(self.model.named_parameters())
@@ -137,7 +124,6 @@ class Trainer:
                 self.optimizer.zero_grad()
                 self.scheduler.step()
 
-
                 if idx > self.iterationPerEpoch: 
                     print("Reached iteration limit")
                     break
@@ -146,13 +132,12 @@ class Trainer:
                     self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
                     self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
-
-
-                if global_step % 100 == 99: self.save_model(currentEpoch = epoch, currentStep = idx)
-
+                if global_step % 100 == 99: 
+                    self.save_model(currentEpoch = epoch, currentStep = idx)
+                    self.validate(epoch)
 
             self.currentStep = 0
-            if epoch % 5 == 0: self.validate(epoch)
+            # if epoch % 5 == 0: self.validate(epoch)
 
             if self.accelerator.is_local_main_process: self.writer.flush()
 
@@ -171,9 +156,7 @@ class Trainer:
 
     
     def save_model(self, currentEpoch, currentStep, savePath=None):
-        savePath = savePath if savePath else os.path.join(os.path.join("outputs", "checkpoints"))
-        path = os.path.join(savePath)
-        
+        path = savePath if savePath else os.path.join(os.path.join("outputs", "checkpoints"))        
         self.accelerator.save_state(path)
 
         # self.accelerator.wait_for_everyone()
@@ -187,10 +170,13 @@ class Trainer:
         
 
     def load_model(self):
-        self.accelerator.load_state(os.path.join("outputs", "checkpoints"))
-        self.accelerator.wait_for_everyone()
-
-        data = json.load(open(os.path.join("outputs", "checkpoints", "epoch.json")))
+        try:
+            self.accelerator.load_state(os.path.join("outputs", "checkpoints"))
+            data = json.load(open(os.path.join("outputs", "checkpoints", "epoch.json")))
+        except Exception as e:
+            print(f"Could not load model, starting from scratch because {e}")
+            return 0, 0
+        
         return data["epoch"], data["step"]
         
 
@@ -201,9 +187,9 @@ def parse_args():
     return parser.parse_args()
 
     
-def getDatasetSize(paths):
+def getDatasetSize(paths, verbose=False):
     length = 0
-    for path in list(braceexpand(paths)):
+    for path in tqdm(list(braceexpand(paths)), miniters=40, mininterval=40, desc="Computing dataset length", disable=not verbose):
         stats = json.load(open(path[:-4] + "_stats.json"))
         length += stats["successes"]
 
