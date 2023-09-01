@@ -11,6 +11,11 @@ computes = {
         "num_machine": 2,
         "num_process": 8,
     },
+    "A100MultiNodeNorth": {
+        "name": "A100ClusterNorth",
+        "num_machine": 2,
+        "num_process": 8,
+    },
     "A100SingleNode": {
         "name": "A100Cluster",
         "num_machine": 1,
@@ -49,16 +54,16 @@ dataset = datasets["laion-coco-images"]
 command_to_run = f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}" + (" --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT" if computes[compute_target]["num_machine"] > 1 else "") + " training.py --data-path ${{inputs.data_path}} --epochs 500"
 
 # Preset CLIP full training =======================================
-# compute_target = "A100MultiNode"
+compute_target = "A100MultiNodeNorth"
 
-# environment = "clipTraining"
+environment = "clipTraining"
 
-# exp_name = "clip"
-# jobName = "clip_test_18400_testLoss"
+exp_name = "clip"
+jobName = "clip_test_18400_testLoss"
 
-# dataset = datasets["laion-coco-images"]
+dataset = datasets["laion-coco-images"]
 
-# command_to_run = f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}" + (" --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT" if computes[compute_target]["num_machine"] > 1 else "") + " training.py --data-path ${{inputs.data_path}}"
+command_to_run = f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}" + (" --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT" if computes[compute_target]["num_machine"] > 1 else "") + " training.py --data-path ${{inputs.data_path}}"
 
 # =========================================================================================== #
 

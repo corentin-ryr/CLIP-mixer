@@ -47,7 +47,7 @@ class Trainer:
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=maxlr, betas=(0.9,0.98), eps=1e-6, weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        braceString = data_path + "/00000.tar" # "/{00000..16667}.tar" #
+        braceString = data_path + "/{00000..16667}.tar" #"/00000.tar" #
         datasetLength = getDatasetSize(braceString)
         dp = FileOpener(list(braceexpand(braceString)), mode="b") 
         dp = dp.load_from_tar(length=datasetLength).webdataset()
@@ -61,11 +61,9 @@ class Trainer:
         self.trainLoader = DataLoader2(dp) 
 
         self.scheduler = CosineAnnealingWarmupRestarts(self.optimizer, self.epochs * min(self.iterationPerEpoch, self.numBatches) * self.accelerator.num_processes, 
-                                                       max_lr=maxlr, min_lr=maxlr/100, warmup_steps=20 * self.accelerator.num_processes)
+                                                       max_lr=maxlr, min_lr=maxlr/100, warmup_steps=2000 * self.accelerator.num_processes)
         
         self.model, self.optimizer, self.scheduler = self.accelerator.prepare(self.model, self.optimizer, self.scheduler)
-        # self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
-        self.accelerator.free_memory()
 
         if self.accelerator.is_local_main_process: print(f"The dataset contains {datasetLength} pairs of images and texts.")
 
@@ -74,7 +72,7 @@ class Trainer:
 
         if os.path.exists(os.path.join("outputs", "checkpoints")):
             epoch, step = self.load_model()
-            # self.scheduler.step(epoch * self.numBatches + step)
+            self.scheduler.step(epoch * self.numBatches + step)
             self.currentEpoch = epoch
             self.currentStep = step
 
@@ -117,20 +115,21 @@ class Trainer:
                 # cosine similarity as logits
                 logits_per_text = logit_scale * text_features @ image_features_gathered.t()
                 logits_per_image = logit_scale * image_features @ text_features_gathered.t()
-                # print(logits_per_image.shape, logits_per_text.shape)
-                # print(torch.min(logits_per_image), torch.max(logits_per_image))
 
                 ground_truth = torch.arange(len(image_features), dtype=torch.long).to(self.accelerator.device) + self.accelerator.process_index * len(image_features)
                 total_loss = (loss_img(logits_per_image, ground_truth) + loss_txt(logits_per_text, ground_truth)) / 2
 
                 self.accelerator.backward(total_loss)
                 # Clamp logit scale to 100
-                # if isinstance(self.model, nn.parallel.DistributedDataParallel):
-                #     self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
-                # else:
-                #     self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
+                if isinstance(self.model, nn.parallel.DistributedDataParallel):
+                    self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
+                else:
+                    self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
 
-                if self.accelerator.is_local_main_process:
+                # if self.accelerator.sync_gradients:
+                #     self.accelerator.clip_grad_norm_(self.model.parameters(), 10)
+
+                if self.accelerator.is_local_main_process and global_step % 100 == 99:
                     ax = plot_grad_flow(self.model.named_parameters())
                     self.writer.add_figure("Gradient flow", ax.figure, global_step=global_step)
 
@@ -138,7 +137,6 @@ class Trainer:
                 self.optimizer.zero_grad()
                 self.scheduler.step()
 
-                # print(f"Step took {time.time() - startTime} seconds")
 
                 if idx > self.iterationPerEpoch: 
                     print("Reached iteration limit")
@@ -151,6 +149,7 @@ class Trainer:
 
 
                 if global_step % 100 == 99: self.save_model(currentEpoch = epoch, currentStep = idx)
+
 
             self.currentStep = 0
             if epoch % 5 == 0: self.validate(epoch)
@@ -184,8 +183,6 @@ class Trainer:
         if self.accelerator.is_main_process: 
             # self.accelerator.save(state_dict, os.path.join(path, "model.plk"))
             json.dump({"epoch": currentEpoch, "step": currentStep}, open(os.path.join(path, "epoch.json"), "w"))
-
-        self.accelerator.free_memory()
 
         
 

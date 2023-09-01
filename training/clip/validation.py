@@ -111,7 +111,7 @@ class ImageNetValidator():
         print(f"{len(self.imagenet_classes)} classes, {len(self.imagenet_templates)} templates")
 
 
-        images = ImageNetV2Dataset(transform=preprocess)
+        images = ImageNetV2Dataset(transform=preprocess, location="datasetImageNet")
         self.loader = DataLoader(images, batch_size=32, num_workers=2)
 
 
@@ -146,8 +146,8 @@ class ImageNetValidator():
         with torch.no_grad():
             top1, top5, n = 0., 0., 0.
             for i, (images, target) in enumerate(tqdm(self.loader, miniters=20, mininterval=50, desc="Image net validation")):
-                images = images.cuda()
-                target = target.cuda()
+                images = images.to("mps")
+                target = target.to("mps")
                 
                 # predict
                 if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):
@@ -170,9 +170,9 @@ class ImageNetValidator():
             print(f"Top-1 accuracy: {top1:.2f}%")
             print(f"Top-5 accuracy: {top5:.2f}%")
 
-            if self.writer is not None:
-                self.writer.add_scalar("Top-1 accuracy", top1, step)
-                self.writer.add_scalar("Top-5 accuracy", top5, step)
+        if self.writer is not None:
+            self.writer.add_scalar("Top-1 accuracy", top1, step)
+            self.writer.add_scalar("Top-5 accuracy", top5, step)
 
 
 
@@ -227,7 +227,7 @@ class CosineSimValidator():
         srccCosine = spearmanr(cosineSimilarities, truth)
         pcCosine = pearsonr(cosineSimilarities, truth)
 
-        if verbose:
+        if self.writer:
             if step is not None:
                 self.writer.add_scalar("SRCC Linf", srcclinf.correlation, global_step=step)
                 self.writer.add_scalar("SRCC Cosine", srccCosine.correlation, global_step=step)
@@ -238,57 +238,58 @@ class CosineSimValidator():
                 self.writer.add_text("SRCC Cosine", str(pcCosine.statistic))
 
 
-            print(f"Spearmen Ranking correlation coefficient Linf {srcclinf.correlation:.3f}")
-            print(f"Spearmen Ranking correlation coefficient Cosine {srccCosine.correlation:.3f}")
-            print(f"Pearson correlation coefficient Cosine {pcCosine.statistic:.3f}")
+        print(f"Spearmen Ranking correlation coefficient Linf {srcclinf.correlation:.3f}")
+        print(f"Spearmen Ranking correlation coefficient Cosine {srccCosine.correlation:.3f}")
+        print(f"Pearson correlation coefficient Cosine {pcCosine.statistic:.3f}")
 
-            if step is not None:
-                # Plot the distance with a noise in y, the distance in x and a different color if they are a duplicate
-                cdict = {0: "red", 1: "green", 2: "blue", 3: "orange", 4: "purple"}
-                legend = ["0 - 1", "1 - 2", "2 - 3", "3 - 4", "4 - 5"]
+        # Plot the distance with a noise in y, the distance in x and a different color if they are a duplicate
+        cdict = {0: "red", 1: "green", 2: "blue", 3: "orange", 4: "purple"}
+        legend = ["0 - 1", "1 - 2", "2 - 3", "3 - 4", "4 - 5"]
 
-                fig, ax = plt.subplots()
-                for g in range(len(cdict)):
-                    ix = np.where((g <= truth) & (truth < g + 1))
+        fig, ax = plt.subplots()
+        for g in range(len(cdict)):
+            ix = np.where((g <= truth) & (truth < g + 1))
 
-                    if ix == []:
-                        continue
-                    n, x, _ = ax.hist(
-                        l2Similarities[ix], bins=np.linspace(0, max(l2Similarities), 100), histtype="step", density=True, alpha=0.5, color=cdict[g]
-                    )
-                    if len(np.unique(l2Similarities[ix])) > 1:
-                        density = stats.gaussian_kde(l2Similarities[ix])
-                        ax.plot(x, density(x), c=cdict[g], label=legend[g])
+            if ix == []:
+                continue
+            n, x, _ = ax.hist(
+                l2Similarities[ix], bins=np.linspace(0, max(l2Similarities), 100), histtype="step", density=True, alpha=0.5, color=cdict[g]
+            )
+            if len(np.unique(l2Similarities[ix])) > 1:
+                density = stats.gaussian_kde(l2Similarities[ix])
+                ax.plot(x, density(x), c=cdict[g], label=legend[g])
 
-                ax.legend()
-                ax.get_yaxis().set_visible(False)
-                ax.set_xlabel("L2 Distance between pair")
-                ax.set_title("Distances for duplicate and non-duplicate pairs")
+        ax.legend()
+        ax.get_yaxis().set_visible(False)
+        ax.set_xlabel("L2 Distance between pair")
+        ax.set_title("Distances for duplicate and non-duplicate pairs")
 
-                self.writer.add_figure("neighborContinuousHistogramL2", fig, step)
+        if self.writer and step is not None: self.writer.add_figure("neighborContinuousHistogramL2", fig, step)
+        if verbose: plt.savefig("neighborContinuousHistogramL2.png")
 
-                fig, ax = plt.subplots()
-                for g in range(len(cdict)):
-                    ix = np.where((g <= truth) & (truth < g + 1))
+        fig, ax = plt.subplots()
+        for g in range(len(cdict)):
+            ix = np.where((g <= truth) & (truth < g + 1))
 
-                    if ix == []:
-                        continue
-                    n, x, _ = ax.hist(
-                        cosineSimilarities[ix],
-                        bins=np.linspace(-1, 1, 100),
-                        histtype="step",
-                        density=True,
-                        alpha=0.5,
-                        color=cdict[g],
-                    )
-                    if len(np.unique(cosineSimilarities[ix])) > 1:
-                        density = stats.gaussian_kde(cosineSimilarities[ix])
-                        ax.plot(x, density(x), c=cdict[g], label=legend[g])
+            if ix == []:
+                continue
+            n, x, _ = ax.hist(
+                cosineSimilarities[ix],
+                bins=np.linspace(-1, 1, 100),
+                histtype="step",
+                density=True,
+                alpha=0.5,
+                color=cdict[g],
+            )
+            if len(np.unique(cosineSimilarities[ix])) > 1:
+                density = stats.gaussian_kde(cosineSimilarities[ix])
+                ax.plot(x, density(x), c=cdict[g], label=legend[g])
 
-                ax.legend()
-                ax.get_yaxis().set_visible(False)
-                ax.set_xlabel("Cosine Distance between pair")
-                ax.set_title("Distances for duplicate and non-duplicate pairs")
+        ax.legend()
+        ax.get_yaxis().set_visible(False)
+        ax.set_xlabel("Cosine Distance between pair")
+        ax.set_title("Distances for duplicate and non-duplicate pairs")
 
-                self.writer.add_figure("neighborContinuousHistogramCosine", fig, step)
+        if self.writer and step is not None: self.writer.add_figure("neighborContinuousHistogramCosine", fig, step)
+        if verbose: plt.savefig("neighborContinuousHistogramCosine.png")
         
