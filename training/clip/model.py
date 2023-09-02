@@ -299,7 +299,10 @@ class CLIP(nn.Module):
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         num_params = sum(p.numel() for p in self.transformer.parameters()) + sum([self.text_projection.numel(), self.positional_embedding.numel()]) + sum(p.numel() for p in self.token_embedding.parameters())
-        print("Number of parameters:", num_params)
+        print("Number of parameters of the text encoder:", num_params)
+
+        num_params = sum(p.numel() for p in self.visual.parameters())
+        print("Number of parameters of the visual encoder:", num_params)
 
 
         self.initialize_parameters()

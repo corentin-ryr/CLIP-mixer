@@ -67,7 +67,6 @@ class Trainer:
 
         
         epoch, step = self.load_model()
-        self.scheduler.step(epoch * self.numBatches + step)
         self.startEpoch = epoch
         self.currentStep = step
 
@@ -134,7 +133,8 @@ class Trainer:
 
                 if global_step % 100 == 99: 
                     self.save_model(currentEpoch = epoch, currentStep = idx)
-                    self.validate(epoch)
+                    self.validate(global_step)
+
 
             self.currentStep = 0
             # if epoch % 5 == 0: self.validate(epoch)
@@ -171,8 +171,10 @@ class Trainer:
 
     def load_model(self):
         try:
-            self.accelerator.load_state(os.path.join("outputs", "checkpoints"))
-            data = json.load(open(os.path.join("outputs", "checkpoints", "epoch.json")))
+            print(os.listdir("outputs"))
+            print(os.listdir("outputs/checkpoints"))
+            self.accelerator.load_state("outputs/checkpoints")
+            data = json.load(open("outputs/checkpoints/epoch.json"))
         except Exception as e:
             print(f"Could not load model, starting from scratch because {e}")
             return 0, 0
@@ -232,6 +234,7 @@ def plot_grad_flow(named_parameters):
 
 
 if __name__ == "__main__":
+
 
     # Get the argumants passed to the script
     args = parse_args()

@@ -59,7 +59,7 @@ compute_target = "A100MultiNodeNorth"
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_test_18400_testLoss"
+jobName = "clip_test_32768"
 
 dataset = datasets["laion-coco-images"]
 
