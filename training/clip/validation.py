@@ -238,10 +238,10 @@ class CosineSimValidator():
                 self.writer.add_text("SRCC Cosine", str(srccCosine.correlation))
                 self.writer.add_text("SRCC Cosine", str(pcCosine.statistic))
 
-
-        print(f"Spearmen Ranking correlation coefficient Linf {srcclinf.correlation:.3f}")
-        print(f"Spearmen Ranking correlation coefficient Cosine {srccCosine.correlation:.3f}")
-        print(f"Pearson correlation coefficient Cosine {pcCosine.statistic:.3f}")
+        if verbose:
+            print(f"Spearmen Ranking correlation coefficient Linf {srcclinf.correlation:.3f}")
+            print(f"Spearmen Ranking correlation coefficient Cosine {srccCosine.correlation:.3f}")
+            print(f"Pearson correlation coefficient Cosine {pcCosine.statistic:.3f}")
 
         # Plot the distance with a noise in y, the distance in x and a different color if they are a duplicate
         cdict = {0: "red", 1: "green", 2: "blue", 3: "orange", 4: "purple"}
