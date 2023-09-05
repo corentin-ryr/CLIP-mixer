@@ -32,7 +32,7 @@ class STS(Dataset):
 
 
 class LaionCoco(Dataset):
-    def __init__(self, data_path, files, images_path, preprocess, verbose=False, seed=None, writeToTmp=False) -> None:
+    def __init__(self, data_path, files, images_path, preprocess, verbose=False, seed=None) -> None:
         super().__init__()
 
         self.length = 0
@@ -50,7 +50,7 @@ class LaionCoco(Dataset):
                 self.length += localLength
                 self.captionKeyShard += captionKeyShard
         
-        print(f"Time taken to init the dataset: {time.time() - startTime}")
+        if verbose: print(f"Time taken to init the dataset: {time.time() - startTime}")
 
         # Shuffle the dataset
         random.Random(seed).shuffle(self.captionKeyShard)
@@ -74,7 +74,6 @@ class LaionCoco(Dataset):
         
         image = Image.open(os.path.join(self.images_path, shard + key))
         image = self.preprocess(image)
-
         return image, caption
     
     def __len__(self):
@@ -91,7 +90,7 @@ class UnzipDataset():
         blobService = BlobServiceClient.from_connection_string("DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net")
 
         # Check if container exists and create it otherwise
-        self.containerClient = blobService.get_container_client("laion-coco-images")
+        self.containerClient = blobService.get_container_client("laion-coco-unzip")
         if not self.containerClient.exists():
             self.containerClient.create_container()
 
@@ -99,21 +98,15 @@ class UnzipDataset():
     def unzipDataset(self, tarFiles): # tarFiles is a string in the form of {0..9}.tar
 
         braceString = list(braceexpand(self.path + tarFiles))
-        thread_map(self._unzipTar, braceString, max_workers=16)
+        # self._unzipTar(braceString[0])
+        process_map(self._unzipTar, braceString, max_workers=32, chunksize=8)
 
 
     def _unzipTar(self, tarPath):
-        with tarfile.open(tarPath, "r") as tar:
+        with tarfile.open(tarPath, "r|") as tar:
             # Extract all in the tmp directory
-            for tarInfo in tar.getmembers():
+            for tarInfo in tar:
                 if tarInfo.name.endswith(".jpg"):
                     # Upload image to blob storage
-                    if os.path.exists(os.path.join(self.imagePath, self.path[-9:] + tarInfo.name[:-4])):
-                        # Delete the file
-                        self.containerClient.delete_blob(self.path[-9:] + tarInfo.name[:-4])
-
-                    blobClient = self.containerClient.get_blob_client(self.path[-9:-4] + tarInfo.name[:-4])
-                    if not blobClient.exists():
-                        blobClient.upload_blob(tar.extractfile(tarInfo.name).read())
-    
+                    self.containerClient.upload_blob(tarPath[-9:-4] + tarInfo.name[:-4], tar.extractfile(tarInfo).read(), overwrite=True)
 

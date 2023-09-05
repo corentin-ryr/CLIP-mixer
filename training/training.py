@@ -14,8 +14,6 @@ from clip import clip
 from clip.model import CLIP
 from clip.validation import ImageNetValidator, CosineSimValidator
 
-from torchdata.datapipes.iter import FileOpener
-from torchdata.dataloader2 import DataLoader2
 from torch.utils.data import DataLoader
 
 from argparse import ArgumentParser
@@ -24,6 +22,8 @@ from PIL import Image
 
 from braceexpand import braceexpand
 from azure.storage.blob import BlobClient, BlobServiceClient
+from clip.dataset import LaionCoco, UnzipDataset
+
 
 class Trainer:
 
@@ -44,7 +44,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 5e-4 / 20
+        maxlr = 5e-4 / 10
         batch_size = 4096
 
         self.preprocess = preprocess
@@ -65,9 +65,11 @@ class Trainer:
         # dp = dp.batch(batch_size=batch_size, drop_last=True)
         # self.numBatches = len(dp)
 
-        dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", preprocess=preprocess, verbose=True, seed=42)
-        self.trainLoader = DataLoader(dataset, shuffle=False) 
-        print(len(dataloader))
+        dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
+
+        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=12, drop_last=True) 
+
+        print(len(self.trainLoader))
 
         self.scheduler = CosineAnnealingWarmupRestarts(self.optimizer, self.epochs * min(self.iterationPerEpoch, len(self.trainLoader)), 
                                                        max_lr=maxlr, min_lr=maxlr/100, warmup_steps=2000 * self.accelerator.num_processes)
@@ -272,23 +274,9 @@ if __name__ == "__main__":
     preprocess = clip._transform(model.visual.input_resolution)
 
 
-    from clip.dataset import LaionCoco, UnzipDataset
-
-    unzip = UnzipDataset(args.data_path, args.image_path)
-    unzip.unzipDataset("/{00000..16667}.tar")
-
-
-
-    # dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42, writeToTmp=False)
-
-    # print(len(dataset))
-
-    # dataloader = DataLoader(dataset, batch_size=10)
-    # for idx, batch in tqdm(enumerate(dataloader)):
-    #     pass
-
-    raise Exception
-
+    # unzip = UnzipDataset(args.data_path, args.image_path)
+    # unzip.unzipDataset("/{00400..16667}.tar")
+    # raise Exception
 
     trainer = Trainer(model, preprocess, epochs=args.epochs, data_path=args.data_path)
 
