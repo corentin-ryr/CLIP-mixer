@@ -214,6 +214,7 @@ def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--data-path", type=str, default="C:/Users/royc/Documents/DeduplicationSourceCode/Data/STS-b/laion-coco-images")
     parser.add_argument("--epochs", type=int, default=32)
+    parser.add_argument("--image-path", type=str, default="")
     return parser.parse_args()
 
     
@@ -271,16 +272,22 @@ if __name__ == "__main__":
     preprocess = clip._transform(model.visual.input_resolution)
 
 
-    from clip.dataset import LaionCoco
-    dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", preprocess=preprocess, verbose=True, seed=42, writeToTmp=True)
+    from clip.dataset import LaionCoco, UnzipDataset
 
-    print(len(dataset))
+    unzip = UnzipDataset(args.data_path, args.image_path)
+    unzip.unzipDataset("/{00000..16667}.tar")
+
+
+
+    # dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42, writeToTmp=False)
+
+    # print(len(dataset))
+
+    # dataloader = DataLoader(dataset, batch_size=10)
+    # for idx, batch in tqdm(enumerate(dataloader)):
+    #     pass
+
     raise Exception
-
-    dataloader = DataLoader(dataset, batch_size=10, num_workers=16)
-    for idx, batch in tqdm(enumerate(dataloader)):
-        pass
-
 
 
     trainer = Trainer(model, preprocess, epochs=args.epochs, data_path=args.data_path)

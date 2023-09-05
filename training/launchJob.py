@@ -3,7 +3,11 @@ from azure.ai.ml import MLClient, command, Input, Output, PyTorchDistribution
 from azure.identity import DefaultAzureCredential
 
 
-datasets = {"laion-coco": "azureml:laion_coco:2", "laion-coco-images": "azureml:laion_coco_images:1"}
+datasets = {
+    "laion-coco": "azureml:laion_coco:2",
+    "laion-coco-images": "azureml:laion_coco_images:1",
+    "unzip-laion": "azureml:laion-coco-unzip:1",
+}
 
 computes = {
     "A100MultiNode": {
@@ -26,6 +30,11 @@ computes = {
         "num_machine": 1,
         "num_process": 1,
     },
+    "CPU": {
+        "name": "CPUCompute",
+        "num_machine": 1,
+        "num_process": 1,
+    },
 }
 
 
@@ -43,6 +52,7 @@ computes = {
 
 # Preset CLIP test =======================================
 compute_target = "A100SingleGPU"
+compute_target = "CPU"
 
 environment = "clipTraining"
 
@@ -51,7 +61,15 @@ jobName = "clip_testloss_scheduler"
 
 dataset = datasets["laion-coco-images"]
 
-command_to_run = f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}" + (" --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT" if computes[compute_target]["num_machine"] > 1 else "") + " training.py --data-path ${{inputs.data_path}} --epochs 500"
+command_to_run = (
+    f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
+    + (
+        " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
+        if computes[compute_target]["num_machine"] > 1
+        else ""
+    )
+    + " training.py --data-path ${{inputs.data_path}} --image-path ${{inputs.image_path}} --epochs 500"
+)
 
 # Preset CLIP full training =======================================
 # compute_target = "A100MultiNodeNorth"
@@ -98,13 +116,9 @@ command_job = command(
             type="uri_folder",
             path=dataset,
         ),
+        "image_path": Input(type="uri_folder", path=datasets["unzip-laion"]),
     },
-    outputs={
-        "output": Output(
-            type="uri_folder",
-            path="azureml://subscriptions/eac353b4-2d2e-45c7-a665-6e727a3f8de5/resourcegroups/MixER/workspaces/MachineLearning/datastores/workspaceblobstore/paths/UI/2023-08-11_082922_UTC/",
-        ),
-    },
+
     compute=computes[compute_target]["name"],
     experiment_name=exp_name,
     docker_args="--shm-size=200g",
@@ -112,11 +126,12 @@ command_job = command(
     instance_count=computes[compute_target]["num_machine"],
     distribution=PyTorchDistribution(
         process_count_per_node=computes[compute_target]["num_process"] / computes[compute_target]["num_machine"]
-    ) if computes[compute_target]["num_machine"] > 1 else None,
+    )
+    if computes[compute_target]["num_machine"] > 1
+    else None,
 )
 
 # submit the command
 returned_job = ml_client.jobs.create_or_update(command_job)
 # get a URL for the status of the job
 print(returned_job.services["Studio"].endpoint)
-
