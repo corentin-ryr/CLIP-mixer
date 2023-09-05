@@ -22,18 +22,19 @@ from PIL import Image
 
 from braceexpand import braceexpand
 from azure.storage.blob import BlobClient, BlobServiceClient
-from clip.dataset import LaionCoco, UnzipDataset
+from clip.dataset import LaionCoco, UnzipDataset, CollateCollable
 
 
 class Trainer:
 
     # Init takes a clip model and a dataset
     def __init__(self, model, preprocess, epochs, data_path):
+        self.runName = "clip2"
 
         # Create a Azure container client
         blob_client = BlobServiceClient.from_connection_string(conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net")
         # Get the container or cretae it if it does not exist
-        self.container_client = blob_client.get_container_client("clip")
+        self.container_client = blob_client.get_container_client(self.runName)
         try: self.container_client.create_container()
         except: pass
 
@@ -53,7 +54,7 @@ class Trainer:
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=maxlr, betas=(0.9,0.98), eps=1e-6, weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        # braceString = data_path + "/{00000..16667}.tar" #"/{00000..00006}.tar" #
+        # braceString = data_path + "/{00000..16667}.tar"
         # datasetLength = getDatasetSize(braceString, verbose=self.accelerator.is_local_main_process)
         # dp = FileOpener(list(braceexpand(braceString)), mode="b") 
         # dp = dp.load_from_tar(length=datasetLength).webdataset()
@@ -65,9 +66,9 @@ class Trainer:
         # dp = dp.batch(batch_size=batch_size, drop_last=True)
         # self.numBatches = len(dp)
 
-        dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
+        dataset = LaionCoco(args.data_path, "/{00000..05000}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
-        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=12, drop_last=True) 
+        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=16, drop_last=True, prefetch_factor=1)
 
         print(len(self.trainLoader))
 
@@ -75,6 +76,7 @@ class Trainer:
                                                        max_lr=maxlr, min_lr=maxlr/100, warmup_steps=2000 * self.accelerator.num_processes)
         
         self.model, self.optimizer, self.scheduler, self.trainLoader = self.accelerator.prepare(self.model, self.optimizer, self.scheduler, self.trainLoader)
+        self.numBatches = len(self.trainLoader)
 
         if self.accelerator.is_local_main_process:
             print(f"The dataset contains {len(dataset)} pairs of images and texts.")
@@ -96,6 +98,7 @@ class Trainer:
     def train(self):
         loss_img = nn.CrossEntropyLoss()
         loss_txt = nn.CrossEntropyLoss()
+        showNextSample = False
 
         # add your own code to track the training progress.
         for epoch in range(self.startEpoch, self.epochs):
@@ -104,12 +107,17 @@ class Trainer:
             dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep)
             for idx, batch in enumerate(tqdm(dataloader, disable=not self.accelerator.is_local_main_process, total=len(dataloader), miniters=20, mininterval=30, desc=f"Epoch {epoch}", initial=self.currentStep), start=self.currentStep):                
                 global_step = epoch * self.numBatches + idx
+
+
                 
-                images, texts = list(zip(*batch))
+                images, texts = batch # list(zip(*batch))
                 texts = [text[0] for text in texts]
 
+                if showNextSample and self.accelerator.is_local_main_process:
+                    showNextSample = False
+                    print(texts[0])
+
                 texts = clip.tokenize(texts, truncate=True).to(self.accelerator.device)
-                images:torch.Tensor = torch.stack(images).squeeze().to(self.accelerator.device)
 
                 image_features, text_features, logit_scale = self.model(images, texts)
 
@@ -151,6 +159,7 @@ class Trainer:
                 if global_step % 100 == 99: 
                     self.save_model(currentEpoch = epoch, currentStep = idx)
                     self.validate(global_step)
+                    showNextSample = True
 
 
             self.currentStep = 0
@@ -196,7 +205,7 @@ class Trainer:
         if self.accelerator.is_local_main_process:
             for blob in self.container_client.list_blobs():
                 with open(os.path.join("outputs/checkpoints", blob.name), "wb") as data:
-                    blob = BlobClient.from_connection_string(conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net", container_name="clip", blob_name=blob.name)
+                    blob = BlobClient.from_connection_string(conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net", container_name=self.runName, blob_name=blob.name)
                     data.write(blob.download_blob().readall())
         
         self.accelerator.wait_for_everyone()

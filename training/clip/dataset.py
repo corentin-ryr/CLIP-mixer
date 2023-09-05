@@ -1,4 +1,5 @@
 import tarfile
+from typing import Any
 from torch.utils.data import Dataset
 from datasets import load_dataset
 import torch
@@ -13,6 +14,7 @@ import os
 import pandas as pd
 from azure.storage.blob import BlobServiceClient
 from tqdm.contrib.concurrent import process_map, thread_map
+from io import BytesIO
 
 class STS(Dataset):
     def __init__(self) -> None:
@@ -72,14 +74,26 @@ class LaionCoco(Dataset):
     def __getitem__(self, index):
         caption, key, shard = self.captionKeyShard[index]
         
-        image = Image.open(os.path.join(self.images_path, shard + key))
+        with open(os.path.join(self.images_path, shard + key), "rb") as f:
+            image = Image.open(BytesIO(f.read()))
+
+        # image = Image.open(os.path.join(self.images_path, shard + key))
         image = self.preprocess(image)
         return image, caption
     
     def __len__(self):
         return self.length
 
+class CollateCollable():
+    def __init__(self, preprocess) -> None:
+        self.preprocess = preprocess
 
+    def __call__(self, data) -> Any:
+        image, text = zip(*data)
+        image = self.preprocess(image)
+        print(image.shape)
+        
+        return image, text
 
 class UnzipDataset():
     def __init__(self, path, imagePath) -> None:
