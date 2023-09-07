@@ -18,9 +18,7 @@ from torch.utils.data import DataLoader
 
 from argparse import ArgumentParser
 from tqdm import tqdm
-from PIL import Image
 
-from braceexpand import braceexpand
 from azure.storage.blob import BlobClient, BlobServiceClient
 from clip.dataset import LaionCoco, UnzipDataset
 
@@ -32,7 +30,9 @@ class Trainer:
 
         # Create a Azure container client
         blob_client = BlobServiceClient.from_connection_string(
-            conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net"
+            conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net",
+            max_block_size=64 * 1024 * 1024,
+            max_single_put_size=128 * 1024 * 1024,
         )
         # Get the container or cretae it if it does not exist
         self.container_client = blob_client.get_container_client(self.runName)
@@ -57,21 +57,9 @@ class Trainer:
             self.model.parameters(), lr=maxlr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2
         )  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        # braceString = data_path + "/{00000..16667}.tar"
-        # datasetLength = getDatasetSize(braceString, verbose=self.accelerator.is_local_main_process)
-        # dp = FileOpener(list(braceexpand(braceString)), mode="b")
-        # dp = dp.load_from_tar(length=datasetLength).webdataset()
-        # dp = dp.shuffle()
-        # if self.accelerator.num_processes > 1:
-        #     dp = dp.sharding_filter()
-        #     dp.apply_sharding(self.accelerator.num_processes, self.accelerator.process_index)
-        # dp = dp.map(self.decode)
-        # dp = dp.batch(batch_size=batch_size, drop_last=True)
-        # self.numBatches = len(dp)
-
         dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
-        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=32, drop_last=True, prefetch_factor=1)
+        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=32, drop_last=True, prefetch_factor=1, timeout=1200)
 
         print(len(self.trainLoader))
 
@@ -107,7 +95,7 @@ class Trainer:
     def train(self):
         loss_img = nn.CrossEntropyLoss()
         loss_txt = nn.CrossEntropyLoss()
-        showNextSample = False
+        showNextSample = True
 
         # add your own code to track the training progress.
         for epoch in range(self.startEpoch, self.epochs):
@@ -174,7 +162,7 @@ class Trainer:
                     self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
                     self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
-                if global_step % 100 == 99:
+                if global_step % 100 == 32:
                     self.save_model(currentEpoch=epoch, currentStep=idx + 1)
                     self.validate(global_step)
                     showNextSample = True
@@ -187,12 +175,7 @@ class Trainer:
             self.imageNetValidator.validate(step, self.accelerator.is_local_main_process)
             self.cosineValidator.validate(step, self.accelerator.is_local_main_process)
 
-    def decode(self, x):
-        image = x[".jpg"]
-        text = x[".txt"].read().decode("utf-8")
-        image = self.preprocess(Image.open(image))
 
-        return image, text
 
     def save_model(self, currentEpoch, currentStep, savePath=None):
         path = savePath if savePath else "outputs/checkpoints"
@@ -203,10 +186,12 @@ class Trainer:
 
         # Upload the outputs/checkpoints folder to Azure
         if self.accelerator.is_main_process:
+            # asyncio.ensure_future(uploadToAzure(path, self.container_client))
             for file in os.listdir(path):
                 print(f"Uploading {file}")
                 with open(os.path.join(path, file), "rb") as data:
                     self.container_client.upload_blob(name=file, data=data.read(), overwrite=True)
+            
         self.accelerator.wait_for_everyone()
 
     def load_model(self):
@@ -223,11 +208,11 @@ class Trainer:
         self.accelerator.wait_for_everyone()
 
         try:
-            print(os.listdir("outputs/checkpoints"))
+            if self.accelerator.is_local_main_process: print(os.listdir("outputs/checkpoints"))
             self.accelerator.load_state("outputs/checkpoints")
             data = json.load(open("outputs/checkpoints/epoch.json"))
         except Exception as e:
-            print(f"Could not load model, starting from scratch because {e}")
+            if self.accelerator.is_local_main_process: print(f"Could not load model, starting from scratch because {e}")
             return 0, 0
 
         return data["epoch"], data["step"]
@@ -240,14 +225,6 @@ def parse_args():
     parser.add_argument("--image-path", type=str, default="")
     return parser.parse_args()
 
-
-def getDatasetSize(paths, verbose=False):
-    length = 0
-    for path in tqdm(list(braceexpand(paths)), miniters=40, mininterval=40, desc="Computing dataset length", disable=not verbose):
-        stats = json.load(open(path[:-4] + "_stats.json"))
-        length += stats["successes"]
-
-    return length
 
 
 def plot_grad_flow(named_parameters):
@@ -305,12 +282,6 @@ if __name__ == "__main__":
     )
     preprocess = clip._transform(model.visual.input_resolution)
 
-    # unzip = UnzipDataset(args.data_path, args.image_path)
-    # unzip.unzipDataset("/{15800..16000}.tar")
-    # raise Exception
-
     trainer = Trainer(model, preprocess, epochs=args.epochs, data_path=args.data_path)
-
-    # trainer.validate(step=-1)
 
     trainer.train()

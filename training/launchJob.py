@@ -52,12 +52,11 @@ computes = {
 
 # Preset CLIP test =======================================
 compute_target = "A100SingleGPU"
-compute_target = "CPU"
 
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_datasetGeneration"
+jobName = "clip_initTime"
 
 dataset = datasets["laion-coco-images"]
 
@@ -128,7 +127,7 @@ command_job = command(
     },
     compute=computes[compute_target]["name"],
     experiment_name=exp_name,
-    docker_args="--shm-size=500g",
+    docker_args="--shm-size=700g",
     display_name=jobName,
     instance_count=computes[compute_target]["num_machine"],
     distribution=PyTorchDistribution(

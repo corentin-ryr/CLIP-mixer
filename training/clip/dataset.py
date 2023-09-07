@@ -38,7 +38,7 @@ class LaionCoco(Dataset):
         super().__init__()
 
         self.length = 0
-        self.captionKeyShard = []
+        self.captionKey = []
         self.images_path = images_path
         self.preprocess = preprocess
 
@@ -54,35 +54,33 @@ class LaionCoco(Dataset):
         # This is done because the parquet files are stored on a network drive and opening them sequentially is slow
         startTime = time.time()
         with Pool(32) as p:
-            data = p.map(self._processPath, list(braceexpand(data_path + files)))
+            data = p.map(self._processPath, list(braceexpand(data_path + files)), chunksize=32)
             
-            for localLength, captionKeyShard in data:
+            for localLength, captionKey in data:
                 self.length += localLength
-                self.captionKeyShard += captionKeyShard
+                self.captionKey += captionKey
         
         if verbose: print(f"Time taken to init the dataset: {time.time() - startTime}")
 
         # Shuffle the dataset
-        random.Random(seed).shuffle(self.captionKeyShard)
+        random.Random(seed).shuffle(self.captionKey)
 
     def _processPath(self, path):
         pf = ParquetFile(path[:-4] + ".parquet")
         pf:pd.DataFrame = pf.to_pandas(["caption", "key", "status"])
         pf = pf[pf["status"] == 'success']
 
-        shard = path[-9:-4]
-        captionKeyShard = []
-        for ind in pf.index:
-            captionKeyShard.append((pf["caption"][ind], pf["key"][ind], shard))
-       
-        localLength = len(pf)
-        return localLength, captionKeyShard
+        # shard = path[-9:-4]
+        
+        captionKey = list(zip(pf["caption"], pf["key"]))
+        localLength = len(captionKey)
+        return localLength, captionKey
 
 
     def __getitem__(self, index):
-        caption, key, shard = self.captionKeyShard[index]
+        caption, key = self.captionKey[index]
 
-        image = Image.open(BytesIO(self.containerClient.download_blob(shard + key).readall()))
+        image = Image.open(BytesIO(self.containerClient.download_blob(key[:5] + key).readall()))
         image = self.preprocess(image)
         return image, caption
     
@@ -119,3 +117,14 @@ class UnzipDataset():
                     # Upload image to blob storage
                     self.containerClient.upload_blob(tarPath[-9:-4] + tarInfo.name[:-4], tar.extractfile(tarInfo).read(), overwrite=True)
 
+if __name__ == "__main__":
+    # dataset = LaionCoco("/mnt/laion-coco/", "{0..9}.tar", "/mnt/laion-coco-unzip/", None, verbose=True)
+    # print(len(dataset))
+    # print(dataset[0])
+
+    # dataset = STS()
+    # print(len(dataset))
+    # print(dataset[0])
+
+    dataset = UnzipDataset("/mnt/laion-coco/", "/mnt/laion-coco-unzip/")
+    dataset.unzipDataset("{0..9}.tar")
