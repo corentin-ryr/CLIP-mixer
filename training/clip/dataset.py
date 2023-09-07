@@ -42,6 +42,14 @@ class LaionCoco(Dataset):
         self.images_path = images_path
         self.preprocess = preprocess
 
+
+        blobService = BlobServiceClient.from_connection_string("DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net")
+
+        # Check if container exists and create it otherwise
+        self.containerClient = blobService.get_container_client("laion-coco-unzip")
+        if not self.containerClient.exists():
+            self.containerClient.create_container()
+
         # Use multiprocessing to open the parquet files in parellel
         # This is done because the parquet files are stored on a network drive and opening them sequentially is slow
         startTime = time.time()
@@ -73,27 +81,14 @@ class LaionCoco(Dataset):
 
     def __getitem__(self, index):
         caption, key, shard = self.captionKeyShard[index]
-        
-        with open(os.path.join(self.images_path, shard + key), "rb") as f:
-            image = Image.open(BytesIO(f.read()))
 
-        # image = Image.open(os.path.join(self.images_path, shard + key))
+        image = Image.open(BytesIO(self.containerClient.download_blob(shard + key).readall()))
         image = self.preprocess(image)
         return image, caption
     
     def __len__(self):
         return self.length
 
-class CollateCollable():
-    def __init__(self, preprocess) -> None:
-        self.preprocess = preprocess
-
-    def __call__(self, data) -> Any:
-        image, text = zip(*data)
-        image = self.preprocess(image)
-        print(image.shape)
-        
-        return image, text
 
 class UnzipDataset():
     def __init__(self, path, imagePath) -> None:
@@ -113,7 +108,7 @@ class UnzipDataset():
 
         braceString = list(braceexpand(self.path + tarFiles))
         # self._unzipTar(braceString[0])
-        process_map(self._unzipTar, braceString, max_workers=32, chunksize=8)
+        process_map(self._unzipTar, braceString, max_workers=32, chunksize=4)
 
 
     def _unzipTar(self, tarPath):

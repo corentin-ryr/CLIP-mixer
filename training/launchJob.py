@@ -52,12 +52,12 @@ computes = {
 
 # Preset CLIP test =======================================
 compute_target = "A100SingleGPU"
-# compute_target = "CPU"
+compute_target = "CPU"
 
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_test_newDataset"
+jobName = "clip_datasetGeneration"
 
 dataset = datasets["laion-coco-images"]
 
@@ -72,24 +72,24 @@ command_to_run = (
 )
 
 # Preset CLIP full training =======================================
-# compute_target = "A100MultiNodeNorth"
+compute_target = "A100MultiNodeNorth"
 
-# environment = "clipTraining"
+environment = "clipTraining"
 
-# exp_name = "clip"
-# jobName = "clip_test_32768"
+exp_name = "clip"
+jobName = "clip_transformer"
 
-# dataset = datasets["laion-coco-images"]
+dataset = datasets["laion-coco-images"]
 
-# command_to_run = (
-#     f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
-#     + (
-#         " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
-#         if computes[compute_target]["num_machine"] > 1
-#         else ""
-#     )
-#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}}"
-# )
+command_to_run = (
+    f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
+    + (
+        " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
+        if computes[compute_target]["num_machine"] > 1
+        else ""
+    )
+    + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}}"
+)
 
 # =========================================================================================== #
 
@@ -128,7 +128,7 @@ command_job = command(
     },
     compute=computes[compute_target]["name"],
     experiment_name=exp_name,
-    docker_args="--shm-size=200g",
+    docker_args="--shm-size=500g",
     display_name=jobName,
     instance_count=computes[compute_target]["num_machine"],
     distribution=PyTorchDistribution(
