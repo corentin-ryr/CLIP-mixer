@@ -127,7 +127,7 @@ command_job = command(
     },
     compute=computes[compute_target]["name"],
     experiment_name=exp_name,
-    docker_args="--shm-size=700g",
+    docker_args="--shm-size=800g",
     display_name=jobName,
     instance_count=computes[compute_target]["num_machine"],
     distribution=PyTorchDistribution(

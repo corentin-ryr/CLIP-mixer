@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from torch import nn
 
 from torch.utils.checkpoint import checkpoint_sequential
-from .mixer import MixerBlock
 
 
 class Bottleneck(nn.Module):
@@ -60,6 +59,7 @@ class Bottleneck(nn.Module):
         out += identity
         out = self.relu3(out)
         return out
+    
 
 
 class AttentionPool2d(nn.Module):
@@ -198,6 +198,35 @@ class ResidualAttentionBlock(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
+class MixerBlock(nn.Module):
+    def __init__(self, dim, num_patch, token_dim, channel_dim, dropout=0.0):
+        super().__init__()
+        self.dropout = dropout
+
+        self.layerNorm1 = LayerNorm(dim)
+        self.lin1 = nn.Linear(num_patch, token_dim)
+        self.lin2 = nn.Linear(token_dim, num_patch)
+
+        self.layerNorm2 = LayerNorm(dim)
+        self.lin3 = nn.Linear(dim, channel_dim)
+        self.lin4 = nn.Linear(channel_dim, dim)
+
+
+    def forward(self, x):
+        x = x + self.token_mix(x)
+        x = x + self.channel_mix(x)
+        return x
+    
+    def token_mix(self, x):
+        x = self.layerNorm1(x)
+        x = torch.transpose(x, -1, -2)
+        x = self.lin2(QuickGELU(self.lin1(x)))
+        return torch.transpose(x, -1, -2)
+    
+    def channel_mix(self, x):
+        x = self.layerNorm2(x)
+        x = self.lin4(QuickGELU(self.lin3(x)))
+        return x
 
 class Transformer(nn.Module):
     def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None):
@@ -207,15 +236,14 @@ class Transformer(nn.Module):
         self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
-        # x.requires_grad = True
         return checkpoint_sequential(self.resblocks, segments=4, input=x)
-        # return self.resblocks(x)
 
 
 class Mixer(nn.Module):
     def __init__(self, width: int, layers: int, context: int) -> None:
         super().__init__()
-
+        self.width = width
+        self.layers = layers
         self.mixBlocks = nn.Sequential(*[MixerBlock(width, context, context * 4, width * 4) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
@@ -223,18 +251,20 @@ class Mixer(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int, context_length:int, useTransformer: bool = True):
         super().__init__()
+        self.useTransformer = useTransformer
         self.input_resolution = input_resolution
         self.output_dim = output_dim
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
 
         scale = width**-0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
-        self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
+        if self.useTransformer: self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
 
-        self.transformer = Transformer(width, layers, heads)
+        if self.useTransformer: self.transformer = Transformer(width, layers, heads)
+        else: self.transformer = Mixer(width, layers, context_length)
 
         self.ln_post = LayerNorm(width)
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
@@ -246,7 +276,7 @@ class VisionTransformer(nn.Module):
         x = torch.cat(
             [self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1
         )  # shape = [*, grid ** 2 + 1, width]
-        x = x + self.positional_embedding.to(x.dtype)
+        if self.useTransformer: x = x + self.positional_embedding.to(x.dtype)
         x = self.ln_pre(x)
 
         x = x.permute(1, 0, 2)  # NLD -> LND
@@ -297,6 +327,8 @@ class CLIP(nn.Module):
                 layers=vision_layers,
                 heads=vision_heads,
                 output_dim=embed_dim,
+                context_length=context_length,
+                useTransformer=self.useTransformer,
             )
 
         if self.useTransformer:
@@ -308,7 +340,8 @@ class CLIP(nn.Module):
 
         self.vocab_size = vocab_size
         self.token_embedding = nn.Embedding(vocab_size, transformer_width)
-        self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width))
+        if self.useTransformer: self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width))
+        else: self.positional_embedding = None
         self.ln_final = LayerNorm(transformer_width)
 
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
@@ -316,9 +349,10 @@ class CLIP(nn.Module):
 
         num_params = (
             sum(p.numel() for p in self.transformer.parameters())
-            + sum([self.text_projection.numel(), self.positional_embedding.numel()])
+            + sum(self.text_projection.numel())
             + sum(p.numel() for p in self.token_embedding.parameters())
         )
+        if self.positional_embedding: num_params += self.positional_embedding.numel()
         print("Number of parameters of the text encoder:", num_params)
 
         num_params = sum(p.numel() for p in self.visual.parameters())
@@ -328,7 +362,7 @@ class CLIP(nn.Module):
 
     def initialize_parameters(self):
         nn.init.normal_(self.token_embedding.weight, std=0.02)
-        nn.init.normal_(self.positional_embedding, std=0.01)
+        if self.positional_embedding: nn.init.normal_(self.positional_embedding, std=0.01)
 
         if isinstance(self.visual, ModifiedResNet):
             if self.visual.attnpool is not None:
@@ -346,11 +380,18 @@ class CLIP(nn.Module):
         proj_std = (self.transformer.width**-0.5) * ((2 * self.transformer.layers) ** -0.5)
         attn_std = self.transformer.width**-0.5
         fc_std = (2 * self.transformer.width) ** -0.5
-        for block in self.transformer.resblocks:
-            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
-            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
-            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
-            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+        if self.useTransformer:
+            for block in self.transformer.resblocks:
+                nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
+                nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+                nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+                nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+        else:
+            for block in self.transformer.mixBlocks:
+                nn.init.normal_(block.lin1.weight, std=fc_std)
+                nn.init.normal_(block.lin2.weight, std=proj_std)
+                nn.init.normal_(block.lin3.weight, std=fc_std)
+                nn.init.normal_(block.lin4.weight, std=proj_std)
 
         if self.text_projection is not None:
             nn.init.normal_(self.text_projection, std=self.transformer.width**-0.5)
@@ -373,7 +414,7 @@ class CLIP(nn.Module):
     def encode_text(self, text):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
 
-        x = x + self.positional_embedding.type(self.dtype)
+        if self.useTransformer: x = x + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD

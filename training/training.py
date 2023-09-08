@@ -1,4 +1,5 @@
 import json
+from multiprocessing import Pool
 import os
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
@@ -19,19 +20,19 @@ from torch.utils.data import DataLoader
 from argparse import ArgumentParser
 from tqdm import tqdm
 
-from azure.storage.blob import BlobClient, BlobServiceClient
+from azure.storage.blob import BlobClient, BlobServiceClient, ContainerClient
 from clip.dataset import LaionCoco, UnzipDataset
 
 
 class Trainer:
     # Init takes a clip model and a dataset
     def __init__(self, model, preprocess, epochs, data_path):
-        self.runName = "clip2"
+        self.runName = "clip-transformer"
 
         # Create a Azure container client
         blob_client = BlobServiceClient.from_connection_string(
             conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net",
-            max_block_size=64 * 1024 * 1024,
+            max_block_size=128 * 1024 * 1024,
             max_single_put_size=128 * 1024 * 1024,
         )
         # Get the container or cretae it if it does not exist
@@ -59,7 +60,7 @@ class Trainer:
 
         dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
-        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=32, drop_last=True, prefetch_factor=1, timeout=1200)
+        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=24, drop_last=True, prefetch_factor=1, timeout=1200)
 
         print(len(self.trainLoader))
 
@@ -162,7 +163,7 @@ class Trainer:
                     self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
                     self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
-                if global_step % 100 == 32:
+                if global_step % 100 == 99:
                     self.save_model(currentEpoch=epoch, currentStep=idx + 1)
                     self.validate(global_step)
                     showNextSample = True
@@ -175,8 +176,6 @@ class Trainer:
             self.imageNetValidator.validate(step, self.accelerator.is_local_main_process)
             self.cosineValidator.validate(step, self.accelerator.is_local_main_process)
 
-
-
     def save_model(self, currentEpoch, currentStep, savePath=None):
         path = savePath if savePath else "outputs/checkpoints"
         self.accelerator.save_state(path)
@@ -186,33 +185,28 @@ class Trainer:
 
         # Upload the outputs/checkpoints folder to Azure
         if self.accelerator.is_main_process:
-            # asyncio.ensure_future(uploadToAzure(path, self.container_client))
-            for file in os.listdir(path):
-                print(f"Uploading {file}")
-                with open(os.path.join(path, file), "rb") as data:
-                    self.container_client.upload_blob(name=file, data=data.read(), overwrite=True)
-            
+            with Pool(len(os.listdir(path))) as p:
+                p.starmap(_uploadBlob, [(path, file, self.container_client) for file in os.listdir(path)])
+
         self.accelerator.wait_for_everyone()
+
 
     def load_model(self):
         # Download the outputs/checkpoints folder from Azure
         if self.accelerator.is_local_main_process:
             for blob in self.container_client.list_blobs():
                 with open(os.path.join("outputs/checkpoints", blob.name), "wb") as data:
-                    blob = BlobClient.from_connection_string(
-                        conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net",
-                        container_name=self.runName,
-                        blob_name=blob.name,
-                    )
-                    data.write(blob.download_blob().readall())
+                    self.container_client.get_blob_client(blob.name).download_blob().readinto(data)
         self.accelerator.wait_for_everyone()
 
         try:
-            if self.accelerator.is_local_main_process: print(os.listdir("outputs/checkpoints"))
+            if self.accelerator.is_local_main_process:
+                print(os.listdir("outputs/checkpoints"))
             self.accelerator.load_state("outputs/checkpoints")
             data = json.load(open("outputs/checkpoints/epoch.json"))
         except Exception as e:
-            if self.accelerator.is_local_main_process: print(f"Could not load model, starting from scratch because {e}")
+            if self.accelerator.is_local_main_process:
+                print(f"Could not load model, starting from scratch because {e}")
             return 0, 0
 
         return data["epoch"], data["step"]
@@ -225,6 +219,11 @@ def parse_args():
     parser.add_argument("--image-path", type=str, default="")
     return parser.parse_args()
 
+
+def _uploadBlob(path, file, container_client:ContainerClient):
+    print(f"Uploading {file}")
+    with open(os.path.join(path, file), "rb") as data:
+        container_client.upload_blob(name=file, data=data.read(), overwrite=True)
 
 
 def plot_grad_flow(named_parameters):
