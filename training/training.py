@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 from argparse import ArgumentParser
 from tqdm import tqdm
 
-from azure.storage.blob import BlobClient, BlobServiceClient, ContainerClient
+from azure.storage.blob import BlobServiceClient, ContainerClient
 from clip.dataset import LaionCoco, UnzipDataset
 
 
@@ -52,6 +52,12 @@ class Trainer:
 
         self.preprocess = preprocess
 
+        self.timeBenchmark = False
+        if self.timeBenchmark:
+            self.start = torch.cuda.Event(enable_timing=True)
+            self.end = torch.cuda.Event(enable_timing=True)
+            self.timeList = []
+
         self.accelerator = Accelerator(step_scheduler_with_optimizer=True)
 
         self.optimizer = optim.Adam(
@@ -60,9 +66,7 @@ class Trainer:
 
         dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
-        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=24, drop_last=True, prefetch_factor=1, timeout=1200)
-
-        print(len(self.trainLoader))
+        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=24, prefetch_factor=1, timeout=1800, drop_last=True) # 24 workers max for the transformer 
 
         self.scheduler = CosineAnnealingWarmupRestarts(
             self.optimizer,
@@ -115,6 +119,8 @@ class Trainer:
                 ),
                 start=self.currentStep,
             ):
+                if self.timeBenchmark: self.start.record()
+                
                 global_step = epoch * self.numBatches + idx
 
                 images, texts = batch
@@ -141,15 +147,13 @@ class Trainer:
 
                 self.accelerator.backward(total_loss)
 
+                if self.timeBenchmark: self.end.record()
+
                 # Clamp logit scale to 100
                 if isinstance(self.model, nn.parallel.DistributedDataParallel):
                     self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
                 else:
                     self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
-
-                # if self.accelerator.is_local_main_process and global_step % 100 == 99:
-                #     ax = plot_grad_flow(self.model.named_parameters())
-                #     self.writer.add_figure("Gradient flow", ax.figure, global_step=global_step)
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
@@ -163,11 +167,18 @@ class Trainer:
                     self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
                     self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
-                if global_step % 100 == 99:
+                if global_step % 200 == 199:
+                    self.accelerator.wait_for_everyone()
                     self.save_model(currentEpoch=epoch, currentStep=idx + 1)
                     self.validate(global_step)
                     showNextSample = True
                     self.accelerator.wait_for_everyone()
+                
+                if self.timeBenchmark:
+                    torch.cuda.synchronize()
+                    if idx > 10:
+                        self.timeList.append(self.start.elapsed_time(self.end))
+                        print(f"Average step time: {sum(self.timeList) / len(self.timeList)}")
 
             self.currentStep = 0
 
@@ -185,8 +196,11 @@ class Trainer:
 
         # Upload the outputs/checkpoints folder to Azure
         if self.accelerator.is_main_process:
-            with Pool(len(os.listdir(path))) as p:
-                p.starmap(_uploadBlob, [(path, file, self.container_client) for file in os.listdir(path)])
+            for file in os.listdir(path):
+                _uploadBlob(path, file, self.container_client)
+
+            # with Pool(len(os.listdir(path))) as p:
+            #     p.starmap(_uploadBlob, [(path, file, self.container_client) for file in os.listdir(path)])
 
         self.accelerator.wait_for_everyone()
 
@@ -278,6 +292,7 @@ if __name__ == "__main__":
         transformer_heads=8,
         vocab_size=49408,
         context_length=77,
+        useTransformer=True
     )
     preprocess = clip._transform(model.visual.input_resolution)
 

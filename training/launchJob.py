@@ -56,7 +56,7 @@ compute_target = "A100SingleGPU"
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_initTime"
+jobName = "clip_testMixer"
 
 dataset = datasets["laion-coco-images"]
 

@@ -203,30 +203,35 @@ class MixerBlock(nn.Module):
         super().__init__()
         self.dropout = dropout
 
-        self.layerNorm1 = LayerNorm(dim)
         self.lin1 = nn.Linear(num_patch, token_dim)
         self.lin2 = nn.Linear(token_dim, num_patch)
+        self.layerNorm1 = LayerNorm(dim)
+        self.token_mix_seq = nn.Sequential(
+            self.lin1,
+            QuickGELU(),
+            self.lin2,
+        )
 
-        self.layerNorm2 = LayerNorm(dim)
         self.lin3 = nn.Linear(dim, channel_dim)
         self.lin4 = nn.Linear(channel_dim, dim)
-
+        self.channel_mix_seq = nn.Sequential(
+            LayerNorm(dim),
+            self.lin3,
+            QuickGELU(),
+            self.lin4,
+        )
 
     def forward(self, x):
         x = x + self.token_mix(x)
-        x = x + self.channel_mix(x)
+        x = x + self.channel_mix_seq(x)
         return x
     
     def token_mix(self, x):
         x = self.layerNorm1(x)
         x = torch.transpose(x, -1, -2)
-        x = self.lin2(QuickGELU(self.lin1(x)))
+        x = self.token_mix_seq(x)
         return torch.transpose(x, -1, -2)
-    
-    def channel_mix(self, x):
-        x = self.layerNorm2(x)
-        x = self.lin4(QuickGELU(self.lin3(x)))
-        return x
+
 
 class Transformer(nn.Module):
     def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None):
@@ -264,7 +269,7 @@ class VisionTransformer(nn.Module):
         self.ln_pre = LayerNorm(width)
 
         if self.useTransformer: self.transformer = Transformer(width, layers, heads)
-        else: self.transformer = Mixer(width, layers, context_length)
+        else: self.transformer = Mixer(width, layers, (input_resolution // patch_size) ** 2 + 1)
 
         self.ln_post = LayerNorm(width)
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
@@ -279,9 +284,9 @@ class VisionTransformer(nn.Module):
         if self.useTransformer: x = x + self.positional_embedding.to(x.dtype)
         x = self.ln_pre(x)
 
-        x = x.permute(1, 0, 2)  # NLD -> LND
+        if self.useTransformer: x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
+        if self.useTransformer: x = x.permute(1, 0, 2)  # LND -> NLD
 
         x = self.ln_post(x[:, 0, :])
 
@@ -336,7 +341,7 @@ class CLIP(nn.Module):
                 width=transformer_width, layers=transformer_layers, heads=transformer_heads, attn_mask=self.build_attention_mask()
             )
         else:
-            self.transformer = Mixer(width=transformer_width, layers=transformer_layers, heads=transformer_heads, context=context_length)
+            self.transformer = Mixer(width=transformer_width, layers=transformer_layers, context=context_length)
 
         self.vocab_size = vocab_size
         self.token_embedding = nn.Embedding(vocab_size, transformer_width)
@@ -349,10 +354,10 @@ class CLIP(nn.Module):
 
         num_params = (
             sum(p.numel() for p in self.transformer.parameters())
-            + sum(self.text_projection.numel())
+            + self.text_projection.numel()
             + sum(p.numel() for p in self.token_embedding.parameters())
         )
-        if self.positional_embedding: num_params += self.positional_embedding.numel()
+        if self.useTransformer: num_params += self.positional_embedding.numel()
         print("Number of parameters of the text encoder:", num_params)
 
         num_params = sum(p.numel() for p in self.visual.parameters())
@@ -362,7 +367,7 @@ class CLIP(nn.Module):
 
     def initialize_parameters(self):
         nn.init.normal_(self.token_embedding.weight, std=0.02)
-        if self.positional_embedding: nn.init.normal_(self.positional_embedding, std=0.01)
+        if self.useTransformer: nn.init.normal_(self.positional_embedding, std=0.01)
 
         if isinstance(self.visual, ModifiedResNet):
             if self.visual.attnpool is not None:
@@ -415,9 +420,9 @@ class CLIP(nn.Module):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
 
         if self.useTransformer: x = x + self.positional_embedding.type(self.dtype)
-        x = x.permute(1, 0, 2)  # NLD -> LND
+        if self.useTransformer: x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
+        if self.useTransformer: x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
 
         # x.shape = [batch_size, n_ctx, transformer.width]

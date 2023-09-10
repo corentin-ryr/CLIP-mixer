@@ -113,7 +113,7 @@ class ImageNetValidator():
 
         os.makedirs("datasetImageNet", exist_ok=True)
         images = ImageNetV2Dataset(transform=preprocess, location="datasetImageNet")
-        self.loader = DataLoader(images, batch_size=32, num_workers=2)
+        self.loader = DataLoader(images, batch_size=32, num_workers=0)
 
 
     def zeroshot_classifier(self, classnames, templates):
