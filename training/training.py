@@ -26,8 +26,8 @@ from clip.dataset import LaionCoco, UnzipDataset
 
 class Trainer:
     # Init takes a clip model and a dataset
-    def __init__(self, model, preprocess, epochs, data_path):
-        self.runName = "clip-transformer"
+    def __init__(self, model, preprocess, epochs, args):
+        self.runName = "clip-transformer-3"
 
         # Create a Azure container client
         blob_client = BlobServiceClient.from_connection_string(
@@ -66,7 +66,9 @@ class Trainer:
 
         dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
-        self.trainLoader = DataLoader(dataset, shuffle=False, batch_size=batch_size, num_workers=24, prefetch_factor=1, timeout=1800, drop_last=True) # 24 workers max for the transformer 
+        self.trainLoader = DataLoader(
+            dataset, shuffle=False, batch_size=batch_size, num_workers=25, prefetch_factor=1, timeout=1800, drop_last=True
+        )  # 24 workers max for the transformer
 
         self.scheduler = CosineAnnealingWarmupRestarts(
             self.optimizer,
@@ -96,89 +98,94 @@ class Trainer:
 
         self.accelerator.wait_for_everyone()
 
+
     # Train function
     def train(self):
         loss_img = nn.CrossEntropyLoss()
         loss_txt = nn.CrossEntropyLoss()
-        showNextSample = True
 
         # add your own code to track the training progress.
         for epoch in range(self.startEpoch, self.epochs):
             self.model.train()
+            showFirstText = True
 
-            dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep)
-            for idx, batch in enumerate(
-                tqdm(
-                    dataloader,
-                    disable=not self.accelerator.is_local_main_process,
-                    total=len(self.trainLoader),
-                    miniters=20,
-                    mininterval=30,
-                    desc=f"Epoch {epoch}",
-                    initial=self.currentStep,
-                ),
-                start=self.currentStep,
-            ):
-                if self.timeBenchmark: self.start.record()
-                
-                global_step = epoch * self.numBatches + idx
+            while self.currentStep < self.numBatches:
+                dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep + 1)
+                for idx, batch in enumerate(
+                    tqdm(
+                        dataloader,
+                        disable=not self.accelerator.is_local_main_process,
+                        total=len(self.trainLoader),
+                        miniters=20,
+                        mininterval=30,
+                        desc=f"Epoch {epoch}",
+                        initial=self.currentStep + 1,
+                    ),
+                    start=self.currentStep + 1,
+                ):
+                    if self.timeBenchmark:
+                        self.start.record()
 
-                images, texts = batch
+                    global_step = epoch * self.numBatches + idx
 
-                if showNextSample and self.accelerator.is_local_main_process:
-                    showNextSample = False
-                    print(texts[0])
+                    images, texts = batch
+                    if  self.accelerator.is_local_main_process and showFirstText: 
+                        print(texts[0])
+                        showFirstText = False
 
-                texts = clip.tokenize(texts, truncate=True).to(self.accelerator.device)
+                    texts = clip.tokenize(texts, truncate=True).to(self.accelerator.device)
 
-                image_features, text_features, logit_scale = self.model(images, texts)
+                    image_features, text_features, logit_scale = self.model(images, texts)
 
-                image_features_gathered = self.accelerator.gather(image_features.detach())
-                text_features_gathered = self.accelerator.gather(text_features.detach())
+                    image_features_gathered = self.accelerator.gather(image_features.detach())
+                    text_features_gathered = self.accelerator.gather(text_features.detach())
 
-                # cosine similarity as logits
-                logits_per_text = logit_scale * text_features @ image_features_gathered.t()
-                logits_per_image = logit_scale * image_features @ text_features_gathered.t()
+                    # cosine similarity as logits
+                    logits_per_text = logit_scale * text_features @ image_features_gathered.t()
+                    logits_per_image = logit_scale * image_features @ text_features_gathered.t()
 
-                ground_truth = torch.arange(len(image_features), dtype=torch.long).to(self.accelerator.device) + self.accelerator.process_index * len(
-                    image_features
-                )
-                total_loss = (loss_img(logits_per_image, ground_truth) + loss_txt(logits_per_text, ground_truth)) / 2
+                    ground_truth = torch.arange(len(image_features), dtype=torch.long).to(self.accelerator.device) + self.accelerator.process_index * len(
+                        image_features
+                    )
+                    total_loss = (loss_img(logits_per_image, ground_truth) + loss_txt(logits_per_text, ground_truth)) / 2
 
-                self.accelerator.backward(total_loss)
+                    self.accelerator.backward(total_loss)
 
-                if self.timeBenchmark: self.end.record()
+                    if self.timeBenchmark:
+                        self.end.record()
 
-                # Clamp logit scale to 100
-                if isinstance(self.model, nn.parallel.DistributedDataParallel):
-                    self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
-                else:
-                    self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
+                    # Clamp logit scale to 100
+                    if isinstance(self.model, nn.parallel.DistributedDataParallel):
+                        self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
+                    else:
+                        self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
 
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-                self.scheduler.step()
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
 
-                if idx > self.iterationPerEpoch:
-                    print("Reached iteration limit")
-                    break
+                    if idx > self.iterationPerEpoch:
+                        print("Reached iteration limit")
+                        break
 
-                if self.accelerator.is_local_main_process:
-                    self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
-                    self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
+                    if self.accelerator.is_local_main_process:
+                        self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
+                        self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
-                if global_step % 200 == 199:
-                    self.accelerator.wait_for_everyone()
-                    self.save_model(currentEpoch=epoch, currentStep=idx + 1)
-                    self.validate(global_step)
-                    showNextSample = True
-                    self.accelerator.wait_for_everyone()
-                
-                if self.timeBenchmark:
-                    torch.cuda.synchronize()
-                    if idx > 10:
-                        self.timeList.append(self.start.elapsed_time(self.end))
-                        print(f"Average step time: {sum(self.timeList) / len(self.timeList)}")
+                    if self.timeBenchmark:
+                        torch.cuda.synchronize()
+                        if idx > 10:
+                            self.timeList.append(self.start.elapsed_time(self.end))
+                            print(f"Average step time: {sum(self.timeList) / len(self.timeList)}")
+                    
+                    if global_step % 200 == 199:
+                        self.currentStep = idx
+                        break
+
+                self.save_model(currentEpoch=epoch, currentStep=idx)
+                self.validate(global_step)
+                self.accelerator.wait_for_everyone()
+                showFirstText = True
 
             self.currentStep = 0
 
@@ -194,16 +201,11 @@ class Trainer:
         if self.accelerator.is_main_process:
             json.dump({"epoch": currentEpoch, "step": currentStep}, open(os.path.join(path, "epoch.json"), "w"))
 
-        # Upload the outputs/checkpoints folder to Azure
-        if self.accelerator.is_main_process:
+            # Upload the outputs/checkpoints folder to Azure
             for file in os.listdir(path):
                 _uploadBlob(path, file, self.container_client)
 
-            # with Pool(len(os.listdir(path))) as p:
-            #     p.starmap(_uploadBlob, [(path, file, self.container_client) for file in os.listdir(path)])
-
         self.accelerator.wait_for_everyone()
-
 
     def load_model(self):
         # Download the outputs/checkpoints folder from Azure
@@ -234,10 +236,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def _uploadBlob(path, file, container_client:ContainerClient):
+def _uploadBlob(path, file, container_client: ContainerClient):
     print(f"Uploading {file}")
     with open(os.path.join(path, file), "rb") as data:
-        container_client.upload_blob(name=file, data=data.read(), overwrite=True)
+        data = data.read()
+        blobClient = container_client.upload_blob(name=file, data=data, overwrite=True)
+    del data, blobClient
 
 
 def plot_grad_flow(named_parameters):
@@ -292,10 +296,10 @@ if __name__ == "__main__":
         transformer_heads=8,
         vocab_size=49408,
         context_length=77,
-        useTransformer=True
+        useTransformer=True,
     )
     preprocess = clip._transform(model.visual.input_resolution)
 
-    trainer = Trainer(model, preprocess, epochs=args.epochs, data_path=args.data_path)
+    trainer = Trainer(model, preprocess, epochs=args.epochs, args=args)
 
     trainer.train()

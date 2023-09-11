@@ -78,8 +78,10 @@ class LaionCoco(Dataset):
     def __getitem__(self, index):
         caption, key = self.captionKey[index]
 
-        image = Image.open(BytesIO(self.containerClient.download_blob(key[:5] + key).readall()))
-        image = self.preprocess(image)
+        stream = BytesIO()
+        self.containerClient.download_blob(key[:5] + key).readinto(stream)
+        with Image.open(stream) as image:
+            image = self.preprocess(image)
         return image, caption
 
     def __len__(self):

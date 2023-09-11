@@ -56,7 +56,7 @@ compute_target = "A100SingleGPU"
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_testMixer"
+jobName = "clip_testleak"
 
 dataset = datasets["laion-coco-images"]
 
@@ -87,7 +87,7 @@ command_to_run = (
         if computes[compute_target]["num_machine"] > 1
         else ""
     )
-    + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}}"
+    + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4"
 )
 
 # =========================================================================================== #

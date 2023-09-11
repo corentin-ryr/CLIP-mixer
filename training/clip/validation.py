@@ -165,7 +165,7 @@ class ImageNetValidator():
                 n += images.size(0)
 
         top1 = (top1 / n) * 100
-        top5 = (top5 / n) * 100 
+        top5 = (top5 / n) * 100
 
         if verbose:
             print(f"Top-1 accuracy: {top1:.2f}%")
@@ -185,7 +185,7 @@ class CosineSimValidator():
         self.device = device
         self.writer = writer
 
-        self.loader = DataLoader(STS(), batch_size=48, shuffle=True)
+        self.loader = DataLoader(STS(), batch_size=32)
 
 
     def validate(self, step, verbose=False):
@@ -209,9 +209,9 @@ class CosineSimValidator():
                     text_features_1 = self.trainer.model.encode_text(text1)
                     text_features_2 = self.trainer.model.encode_text(text2)
           
-            linfSim = torch.max(torch.abs(text_features_1 - text_features_2), dim=1)[0]
-            cosineSim = F.cosine_similarity(text_features_1, text_features_2)
-            l2Sim = torch.norm(text_features_1 - text_features_2, 2, dim=1)
+                linfSim = torch.max(torch.abs(text_features_1 - text_features_2), dim=1)[0]
+                cosineSim = F.cosine_similarity(text_features_1, text_features_2)
+                l2Sim = torch.norm(text_features_1 - text_features_2, 2, dim=1)
 
             linfSimilarities.append(linfSim)
             l2Similarities.append(l2Sim)
