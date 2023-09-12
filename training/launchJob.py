@@ -56,7 +56,7 @@ compute_target = "A100SingleGPU"
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_testleak"
+jobName = "clip_profiling_mixer"
 
 dataset = datasets["laion-coco-images"]
 
@@ -67,28 +67,28 @@ command_to_run = (
         if computes[compute_target]["num_machine"] > 1
         else ""
     )
-    + " training.py --data-path ${{inputs.data_path}} --image-path ${{inputs.image_path}} --epochs 500"
+    + " training.py --data-path ${{inputs.data_path}} --image-path ${{inputs.image_path}} --epochs 500 --run-name clip-testtiming --verbose True"
 )
 
 # Preset CLIP full training =======================================
-compute_target = "A100MultiNodeNorth"
+# compute_target = "A100MultiNodeNorth"
 
-environment = "clipTraining"
+# environment = "clipTraining"
 
-exp_name = "clip"
-jobName = "clip_transformer"
+# exp_name = "clip"
+# jobName = "clip_mixer"
 
-dataset = datasets["laion-coco-images"]
+# dataset = datasets["laion-coco-images"]
 
-command_to_run = (
-    f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
-    + (
-        " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
-        if computes[compute_target]["num_machine"] > 1
-        else ""
-    )
-    + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4"
-)
+# command_to_run = (
+#     f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
+#     + (
+#         " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
+#         if computes[compute_target]["num_machine"] > 1
+#         else ""
+#     )
+#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-mixer"
+# )
 
 # =========================================================================================== #
 

@@ -199,38 +199,27 @@ class ResidualAttentionBlock(nn.Module):
         return x
 
 class MixerBlock(nn.Module):
-    def __init__(self, dim, num_patch, token_dim, channel_dim, dropout=0.0):
+    def __init__(self, dim, num_patch):
         super().__init__()
-        self.dropout = dropout
 
-        self.lin1 = nn.Linear(num_patch, token_dim)
-        self.lin2 = nn.Linear(token_dim, num_patch)
         self.layerNorm1 = LayerNorm(dim)
         self.token_mix_seq = nn.Sequential(
-            self.lin1,
-            QuickGELU(),
-            self.lin2,
+            OrderedDict([("lin1", nn.Linear(num_patch, num_patch * 4)), ("gelu", QuickGELU()), ("lin2", nn.Linear(num_patch * 4, num_patch))])
         )
 
-        self.lin3 = nn.Linear(dim, channel_dim)
-        self.lin4 = nn.Linear(channel_dim, dim)
+        self.layerNorm2 = LayerNorm(dim)
         self.channel_mix_seq = nn.Sequential(
-            LayerNorm(dim),
-            self.lin3,
-            QuickGELU(),
-            self.lin4,
+            OrderedDict([("lin3", nn.Linear(dim, dim * 4)), ("gelu", QuickGELU()), ("lin4", nn.Linear(dim * 4, dim))])
         )
 
     def forward(self, x):
-        x = x + self.token_mix(x)
-        x = x + self.channel_mix_seq(x)
+        x = x + self.token_mix(self.layerNorm1(x))
+        x = x + self.channel_mix_seq(self.layerNorm2(x))
         return x
     
-    def token_mix(self, x):
-        x = self.layerNorm1(x)
-        x = torch.transpose(x, -1, -2)
-        x = self.token_mix_seq(x)
-        return torch.transpose(x, -1, -2)
+    def token_mix(self, x:torch.Tensor):
+        x = self.token_mix_seq(x.permute(0, 2, 1))
+        return x.permute(0, 2, 1)
 
 
 class Transformer(nn.Module):
@@ -249,7 +238,7 @@ class Mixer(nn.Module):
         super().__init__()
         self.width = width
         self.layers = layers
-        self.mixBlocks = nn.Sequential(*[MixerBlock(width, context, context * 4, width * 4) for _ in range(layers)])
+        self.mixBlocks = nn.Sequential(*[MixerBlock(width, context) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
         return checkpoint_sequential(self.mixBlocks, segments=4, input=x)
@@ -393,10 +382,10 @@ class CLIP(nn.Module):
                 nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
         else:
             for block in self.transformer.mixBlocks:
-                nn.init.normal_(block.lin1.weight, std=fc_std)
-                nn.init.normal_(block.lin2.weight, std=proj_std)
-                nn.init.normal_(block.lin3.weight, std=fc_std)
-                nn.init.normal_(block.lin4.weight, std=proj_std)
+                nn.init.normal_(block.token_mix_seq.lin1.weight, std=fc_std)
+                nn.init.normal_(block.token_mix_seq.lin2.weight, std=proj_std)
+                nn.init.normal_(block.channel_mix_seq.lin3.weight, std=fc_std)
+                nn.init.normal_(block.channel_mix_seq.lin4.weight, std=proj_std)
 
         if self.text_projection is not None:
             nn.init.normal_(self.text_projection, std=self.transformer.width**-0.5)

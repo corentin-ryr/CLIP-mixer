@@ -1,3 +1,4 @@
+from distutils.util import strtobool
 import json
 from multiprocessing import Pool
 import os
@@ -22,12 +23,12 @@ from tqdm import tqdm
 
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from clip.dataset import LaionCoco, UnzipDataset
-
+import torch.autograd.profiler as profiler
 
 class Trainer:
     # Init takes a clip model and a dataset
     def __init__(self, model, preprocess, epochs, args):
-        self.runName = "clip-transformer-3"
+        self.runName = args.run_name
 
         # Create a Azure container client
         blob_client = BlobServiceClient.from_connection_string(
@@ -52,7 +53,7 @@ class Trainer:
 
         self.preprocess = preprocess
 
-        self.timeBenchmark = False
+        self.timeBenchmark = args.verbose
         if self.timeBenchmark:
             self.start = torch.cuda.Event(enable_timing=True)
             self.end = torch.cuda.Event(enable_timing=True)
@@ -64,11 +65,11 @@ class Trainer:
             self.model.parameters(), lr=maxlr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2
         )  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
+        dataset = LaionCoco(args.data_path, "/{00000..00667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
         self.trainLoader = DataLoader(
             dataset, shuffle=False, batch_size=batch_size, num_workers=25, prefetch_factor=1, timeout=1800, drop_last=True
-        )  # 24 workers max for the transformer
+        )
 
         self.scheduler = CosineAnnealingWarmupRestarts(
             self.optimizer,
@@ -123,8 +124,7 @@ class Trainer:
                     ),
                     start=self.currentStep + 1,
                 ):
-                    if self.timeBenchmark:
-                        self.start.record()
+                    if self.timeBenchmark: self.start.record()
 
                     global_step = epoch * self.numBatches + idx
 
@@ -151,8 +151,7 @@ class Trainer:
 
                     self.accelerator.backward(total_loss)
 
-                    if self.timeBenchmark:
-                        self.end.record()
+                    if self.timeBenchmark: self.end.record()
 
                     # Clamp logit scale to 100
                     if isinstance(self.model, nn.parallel.DistributedDataParallel):
@@ -172,15 +171,16 @@ class Trainer:
                         self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
                         self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
-                    if self.timeBenchmark:
+                    if self.timeBenchmark and idx > 50 and idx < 350:
                         torch.cuda.synchronize()
-                        if idx > 10:
-                            self.timeList.append(self.start.elapsed_time(self.end))
-                            print(f"Average step time: {sum(self.timeList) / len(self.timeList)}")
+                        self.timeList.append(self.start.elapsed_time(self.end))
                     
-                    if global_step % 200 == 199:
-                        self.currentStep = idx
-                        break
+                    self.currentStep = idx
+                    if global_step % 400 == 399: break
+                else:
+                    break
+                if self.timeBenchmark: print(f"Average step time: {sum(self.timeList) / len(self.timeList)}")
+
 
                 self.save_model(currentEpoch=epoch, currentStep=idx)
                 self.validate(global_step)
@@ -233,6 +233,8 @@ def parse_args():
     parser.add_argument("--data-path", type=str, default="C:/Users/royc/Documents/DeduplicationSourceCode/Data/STS-b/laion-coco-images")
     parser.add_argument("--epochs", type=int, default=32)
     parser.add_argument("--image-path", type=str, default="")
+    parser.add_argument("--run-name", type=str, default="")
+    parser.add_argument("--verbose", type=lambda x:bool(strtobool(x)), default=False)
     return parser.parse_args()
 
 
@@ -296,7 +298,7 @@ if __name__ == "__main__":
         transformer_heads=8,
         vocab_size=49408,
         context_length=77,
-        useTransformer=True,
+        useTransformer=False,
     )
     preprocess = clip._transform(model.visual.input_resolution)
 
