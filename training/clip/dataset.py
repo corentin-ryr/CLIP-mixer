@@ -79,7 +79,17 @@ class LaionCoco(Dataset):
         caption, key = self.captionKey[index]
 
         stream = BytesIO()
-        self.containerClient.download_blob(key[:5] + key).readinto(stream)
+        numberAttempts = 0
+        while True:
+            try:
+                self.containerClient.download_blob(key[:5] + key).readinto(stream)
+                break
+            except Exception:
+                numberAttempts += 1
+                time.sleep(1)
+                if numberAttempts > 10:
+                    raise Exception(f"Impossible to download the image {key[:5] + key}")
+
         with Image.open(stream) as image:
             image = self.preprocess(image)
         return image, caption

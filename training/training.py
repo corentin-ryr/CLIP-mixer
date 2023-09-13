@@ -65,7 +65,7 @@ class Trainer:
             self.model.parameters(), lr=maxlr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2
         )  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        dataset = LaionCoco(args.data_path, "/{00000..00667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
+        dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
         self.trainLoader = DataLoader(
             dataset, shuffle=False, batch_size=batch_size, num_workers=25, prefetch_factor=1, timeout=1800, drop_last=True
