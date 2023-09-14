@@ -76,24 +76,24 @@ command_to_run = "./generateDataset.sh ${{inputs.data_path}} ${{outputs.output}}
 # )
 
 # Preset CLIP full training =======================================
-compute_target = "A100MultiNodeNorth"
+# compute_target = "A100MultiNodeNorth"
 
-environment = "clipTraining"
+# environment = "clipTraining"
 
-exp_name = "clip"
-jobName = "clip_transformer"
+# exp_name = "clip"
+# jobName = "clip_transformer"
 
-dataset = datasets["laion-coco-images"]
+# dataset = datasets["laion-coco-images"]
 
-command_to_run = (
-    f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
-    + (
-        " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
-        if computes[compute_target]["num_machine"] > 1
-        else ""
-    )
-    + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-transformer"
-)
+# command_to_run = (
+#     f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
+#     + (
+#         " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
+#         if computes[compute_target]["num_machine"] > 1
+#         else ""
+#     )
+#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-transformer"
+# )
 
 # =========================================================================================== #
 
@@ -130,12 +130,12 @@ command_job = command(
         ),
         "image_path": Input(type="uri_folder", path=datasets["unzip-laion"]),
     },
-    # outputs={
-    #     "output": Output(
-    #         type="uri_folder",
-    #         path="azureml://subscriptions/eac353b4-2d2e-45c7-a665-6e727a3f8de5/resourcegroups/MixER/workspaces/MachineLearning/datastores/workspaceblobstore/paths/UI/2023-08-11_082922_UTC/",
-    #     )
-    # },
+    outputs={
+        "output": Output(
+            type="uri_folder",
+            path="azureml://subscriptions/eac353b4-2d2e-45c7-a665-6e727a3f8de5/resourcegroups/MixER/workspaces/MachineLearning/datastores/workspaceblobstore/paths/UI/2023-08-11_082922_UTC/",
+        )
+    },
     compute=computes[compute_target]["name"],
     experiment_name=exp_name,
     docker_args="--shm-size=800g",
