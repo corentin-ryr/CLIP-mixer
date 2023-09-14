@@ -23,7 +23,6 @@ from tqdm import tqdm
 
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from clip.dataset import LaionCoco, UnzipDataset
-import torch.autograd.profiler as profiler
 
 class Trainer:
     # Init takes a clip model and a dataset
@@ -188,6 +187,9 @@ class Trainer:
                 showFirstText = True
 
             self.currentStep = 0
+        
+        self.validate(global_step)
+
 
     def validate(self, step):
         if self.accelerator.is_local_main_process:
@@ -298,10 +300,11 @@ if __name__ == "__main__":
         transformer_heads=8,
         vocab_size=49408,
         context_length=77,
-        useTransformer=False,
+        useTransformer=True,
     )
     preprocess = clip._transform(model.visual.input_resolution)
 
     trainer = Trainer(model, preprocess, epochs=args.epochs, args=args)
 
     trainer.train()
+
