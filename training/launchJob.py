@@ -92,7 +92,7 @@ command_to_run = "./generateDataset.sh ${{inputs.data_path}} ${{outputs.output}}
 #         if computes[compute_target]["num_machine"] > 1
 #         else ""
 #     )
-#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-transformer"
+#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 32 --run-name clip-transformer"
 # )
 
 # =========================================================================================== #
@@ -152,3 +152,4 @@ command_job = command(
 returned_job = ml_client.jobs.create_or_update(command_job)
 # get a URL for the status of the job
 print(returned_job.services["Studio"].endpoint)
+

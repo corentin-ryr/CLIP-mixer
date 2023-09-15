@@ -15,5 +15,4 @@
 
 # dig @localhost google.com
 
-img2dataset --url_list $1 --input_format "tsv" --url_col "URL" --caption_col "top_caption" --output_format webdataset --output_folder $2 \
-            --processes_count 32 --thread_count 256 --image_size 256 --enable_wandb False --number_sample_per_shard 10000 --incremental_mode "incremental" --max_shard_retry 3
+img2dataset --url_list $1 --input_format "tsv" --url_col "URL" --caption_col "top_caption" --output_format webdataset --output_folder $2 --processes_count 32 --thread_count 256 --image_size 256 --enable_wandb False --number_sample_per_shard 10000 --incremental_mode "incremental"

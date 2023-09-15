@@ -47,7 +47,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 5e-4 / 10
+        maxlr = 5e-4
         batch_size = 4096
 
         self.preprocess = preprocess
@@ -67,7 +67,7 @@ class Trainer:
         dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
         self.trainLoader = DataLoader(
-            dataset, shuffle=False, batch_size=batch_size, num_workers=25, prefetch_factor=1, timeout=1800, drop_last=True
+            dataset, shuffle=False, batch_size=batch_size, num_workers=30, prefetch_factor=1, timeout=1800, drop_last=True
         )
 
         self.scheduler = CosineAnnealingWarmupRestarts(
@@ -187,6 +187,8 @@ class Trainer:
                 showFirstText = True
 
             self.currentStep = 0
+
+            if epoch == 3: break
         
         self.validate(global_step)
 
