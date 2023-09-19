@@ -68,7 +68,11 @@ class LaionCoco(Dataset):
         random.Random(seed).shuffle(self.captionKey)
 
     def _processPath(self, path):
-        pf = ParquetFile(path[:-4] + ".parquet")
+        try:
+            pf = ParquetFile(path[:-4] + ".parquet")
+        except Exception as e:
+            print(f"Can't open parquet file {path} because {e}")
+            raise e
         pf: pd.DataFrame = pf.to_pandas(["caption", "key", "status"])
         pf = pf[pf["status"] == "success"]
 
@@ -119,13 +123,20 @@ class UnzipDataset:
         process_map(self._unzipTar, braceString, max_workers=32, chunksize=4)
 
     def _unzipTar(self, tarPath):
-        with tarfile.open(tarPath, "r|") as tar:
-            # Extract all in the tmp directory
-            for tarInfo in tar:
-                if tarInfo.name.endswith(".jpg"):
-                    # Upload image to blob storage
-                    self.containerClient.upload_blob(tarPath[-9:-4] + tarInfo.name[:-4], tar.extractfile(tarInfo).read(), overwrite=True)
-
+        try:
+            with tarfile.open(tarPath, "r|") as tar:
+                # Extract all in the tmp directory
+                try:
+                    for tarInfo in tar:
+                        if tarInfo.name.endswith(".jpg"):
+                            # Upload image to blob storage
+                            blobClient = self.containerClient.get_blob_client(tarPath[-9:-4] + tarInfo.name[:-4])
+                            if not blobClient.exists():
+                                blobClient.upload_blob(tarPath[-9:-4] + tarInfo.name[:-4], tar.extractfile(tarInfo).read(), overwrite=True)
+                except Exception as e:
+                    print(f"Impossible to unzip {tarPath} because {e}.")
+        except Exception as e:
+            print(f"Can't unzip shard {tarPath} because {e}")
 
 if __name__ == "__main__":
     # dataset = LaionCoco("/mnt/laion-coco/", "{0..9}.tar", "/mnt/laion-coco-unzip/", None, verbose=True)

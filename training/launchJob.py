@@ -56,12 +56,12 @@ command_to_run = "./generateDataset.sh ${{inputs.data_path}} ${{outputs.output}}
 
 
 # Preset CLIP test =======================================
-# compute_target = "A100SingleGPU"
+# compute_target = "HighMemoryCPU"
 
 # environment = "clipTraining"
 
 # exp_name = "clip"
-# jobName = "clip_profiling_mixer"
+# jobName = "datasetUnziping"
 
 # dataset = datasets["laion-coco-images"]
 
@@ -81,7 +81,7 @@ command_to_run = "./generateDataset.sh ${{inputs.data_path}} ${{outputs.output}}
 # environment = "clipTraining"
 
 # exp_name = "clip"
-# jobName = "clip_transformer"
+# jobName = "clip_mixer_highlr"
 
 # dataset = datasets["laion-coco-images"]
 
@@ -92,7 +92,7 @@ command_to_run = "./generateDataset.sh ${{inputs.data_path}} ${{outputs.output}}
 #         if computes[compute_target]["num_machine"] > 1
 #         else ""
 #     )
-#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 32 --run-name clip-transformer"
+#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-mixer-highlr"
 # )
 
 # =========================================================================================== #

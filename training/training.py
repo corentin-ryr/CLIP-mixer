@@ -47,7 +47,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 5e-4
+        maxlr = 2e-4
         batch_size = 4096
 
         self.preprocess = preprocess
@@ -64,10 +64,10 @@ class Trainer:
             self.model.parameters(), lr=maxlr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2
         )  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        dataset = LaionCoco(args.data_path, "/{00000..16667}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
+        dataset = LaionCoco(args.data_path, "/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
 
         self.trainLoader = DataLoader(
-            dataset, shuffle=False, batch_size=batch_size, num_workers=30, prefetch_factor=1, timeout=1800, drop_last=True
+            dataset, shuffle=False, batch_size=batch_size, num_workers=25, prefetch_factor=1, timeout=1800, drop_last=True
         )
 
         self.scheduler = CosineAnnealingWarmupRestarts(
@@ -302,9 +302,17 @@ if __name__ == "__main__":
         transformer_heads=8,
         vocab_size=49408,
         context_length=77,
-        useTransformer=True,
+        useTransformer=False,
     )
     preprocess = clip._transform(model.visual.input_resolution)
+
+
+    # dataset = UnzipDataset(args.data_path, args.image_path)
+    # dataset.unzipDataset("/{25000..35000}.tar") # TODO 21237
+
+    # raise Exception("Done")
+
+
 
     trainer = Trainer(model, preprocess, epochs=args.epochs, args=args)
 
