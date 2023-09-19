@@ -185,10 +185,15 @@ class CosineSimValidator():
         self.device = device
         self.writer = writer
 
-        self.loader = DataLoader(STS(), batch_size=32)
-
+        self.datasets = [STS(selectedSet=set) for set in ["sick", "mteb/sts16-sts", "mteb/sts15-sts", "mteb/sts14-sts", "mteb/sts13-sts", "mteb/sts12-sts"]]
 
     def validate(self, step, verbose=False):
+        for dataset in self.datasets:
+            self._validateDataset(dataset, step, verbose=verbose)
+
+
+
+    def _validateDataset(self, dataset, step, verbose=False):
         self.trainer.model.eval()
 
         linfSimilarities = []
@@ -196,7 +201,7 @@ class CosineSimValidator():
         cosineSimilarities = []
         truth = []
 
-        for batch in self.loader:
+        for batch in DataLoader(dataset, batch_size=32):
             text1, text2, label = batch
             text1 = clip.tokenize(text1, truncate=True).to(self.device)
             text2 = clip.tokenize(text2, truncate=True).to(self.device)

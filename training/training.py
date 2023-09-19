@@ -64,10 +64,10 @@ class Trainer:
             self.model.parameters(), lr=maxlr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2
         )  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-        dataset = LaionCoco(args.data_path, "/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True, seed=42)
+        dataset = LaionCoco(args.data_path, "/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True)
 
         self.trainLoader = DataLoader(
-            dataset, shuffle=False, batch_size=batch_size, num_workers=25, prefetch_factor=1, timeout=1800, drop_last=True
+            dataset, shuffle=False, batch_size=batch_size, num_workers=22, prefetch_factor=1, timeout=1800, drop_last=True
         )
 
         self.scheduler = CosineAnnealingWarmupRestarts(
@@ -106,6 +106,8 @@ class Trainer:
 
         # add your own code to track the training progress.
         for epoch in range(self.startEpoch, self.epochs):
+            self.trainLoader.dataset.shuffle(epoch)
+
             self.model.train()
             showFirstText = True
 
@@ -308,7 +310,7 @@ if __name__ == "__main__":
 
 
     # dataset = UnzipDataset(args.data_path, args.image_path)
-    # dataset.unzipDataset("/{25000..35000}.tar") # TODO 21237
+    # dataset.unzipDataset("/{33494,20732,20733,20734,20735,19165,34264,19131,20637,31476,31477,31478,31479,18649,18650,18651,34261,31667,23391,31508,33560,20155,20719,18777,23423,20508,32244,32245,32246,20123,24345,32791,19036,19265,30043,19995,32660,33784,18647,20670,32659,23327,33556,18906,20220,31475,23827,32633,33592,25381,32115,32340,33783,19683,25899,26417,18908,18909,32825,33588,20094,29585,29587,33372,20201,31669,32724,33684,34709,34710,20284,20286,20477,32692,34705,20319,31603,20862,19193,19194,19195,19901,34196,34197,20091,23680,32147,33151,23839,31597,21026,32179,33669,19196,32243,34187,31483,33172,33204,33205,33206,33429,33716,33717,19707,31987,34228,19771,24863,32756,32759,34487,20219,20444,34453}.tar")
 
     # raise Exception("Done")
 

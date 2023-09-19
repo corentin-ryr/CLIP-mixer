@@ -1,3 +1,4 @@
+import logging
 import tarfile
 from torch.utils.data import Dataset
 from datasets import load_dataset
@@ -11,15 +12,21 @@ from multiprocessing import Pool
 import time
 import pandas as pd
 from azure.storage.blob import BlobServiceClient
-from tqdm.contrib.concurrent import process_map, thread_map
+from tqdm.contrib.concurrent import process_map
 from io import BytesIO
-from .clip import tokenize
 
+logging.basicConfig(level=logging.WARNING)
 
 class STS(Dataset):
-    def __init__(self) -> None:
+    def __init__(self, selectedSet) -> None:
         super().__init__()
-        self.stsDataset = load_dataset("sick")["test"]
+        if selectedSet == "sick":
+            self.stsDataset = load_dataset(selectedSet)["test"]
+        else:
+            self.stsDataset = load_dataset(selectedSet)["test"]
+            self.stsDataset = self.stsDataset.rename_column("sentence1", "sentence_A")
+            self.stsDataset = self.stsDataset.rename_column("sentence2", "sentence_B")
+            self.stsDataset = self.stsDataset.rename_column("score", "relatedness_score")
 
     def __getitem__(self, index):
         sample = self.stsDataset[index]
@@ -33,7 +40,7 @@ class STS(Dataset):
 
 
 class LaionCoco(Dataset):
-    def __init__(self, data_path, files, images_path, preprocess, verbose=False, seed=None) -> None:
+    def __init__(self, data_path, files, images_path, preprocess, verbose=False) -> None:
         super().__init__()
 
         self.length = 0
@@ -64,8 +71,9 @@ class LaionCoco(Dataset):
         if verbose:
             print(f"Time taken to init the dataset: {time.time() - startTime}")
 
+    def shuffle(self, seed):
         # Shuffle the dataset
-        random.Random(seed).shuffle(self.captionKey)
+        random.Random(seed * 42).shuffle(self.captionKey)
 
     def _processPath(self, path):
         try:
@@ -120,19 +128,24 @@ class UnzipDataset:
     def unzipDataset(self, tarFiles):  # tarFiles is a string in the form of {0..9}.tar
         braceString = list(braceexpand(self.path + tarFiles))
         # self._unzipTar(braceString[0])
-        process_map(self._unzipTar, braceString, max_workers=32, chunksize=4)
+        process_map(self._unzipTar, braceString, max_workers=64, chunksize=4)
 
     def _unzipTar(self, tarPath):
         try:
             with tarfile.open(tarPath, "r|") as tar:
-                # Extract all in the tmp directory
+                numberElements = len([tarInfo for tarInfo in tar.getmembers() if tarInfo.name.endswith(".jpg")])
+                numberElementsStorage = len(list(self.containerClient.walk_blobs(tarPath[-9:-4])))
+
+                if numberElements == numberElementsStorage:
+                    logging.warning(f"Tar {tarPath} already unzipped.")
+                    return
+
+            with tarfile.open(tarPath, "r|") as tar:
                 try:
                     for tarInfo in tar:
                         if tarInfo.name.endswith(".jpg"):
                             # Upload image to blob storage
-                            blobClient = self.containerClient.get_blob_client(tarPath[-9:-4] + tarInfo.name[:-4])
-                            if not blobClient.exists():
-                                blobClient.upload_blob(tarPath[-9:-4] + tarInfo.name[:-4], tar.extractfile(tarInfo).read(), overwrite=True)
+                            self.containerClient.upload_blob(tarPath[-9:-4] + tarInfo.name[:-4], tar.extractfile(tarInfo).read(), overwrite=True)
                 except Exception as e:
                     print(f"Impossible to unzip {tarPath} because {e}.")
         except Exception as e:
