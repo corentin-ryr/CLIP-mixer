@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
 
-from clip.dataset import STS
+from clip.dataset import STS, SST
 
 class ImageNetValidator():
     def __init__(self, trainer, preprocess, device, writer) -> None:
@@ -298,4 +298,71 @@ class CosineSimValidator():
 
         if self.writer and step is not None: self.writer.add_figure(f"{dataset.datasetName}/neighborContinuousHistogramCosine", fig, step)
         if verbose: plt.savefig("neighborContinuousHistogramCosine.png")
+
+
+class LinearClassifier(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, output_dim)
+
+    def forward(self, x):
+        return self.linear(x)
+
+class SST2Validator():
+    def __init__(self, trainer, device, writer) -> None:
+
+        self.trainer = trainer
+        self.device = device
+        self.writer = writer
+
+        self.datasetTrain = SST("train")
+        self.datasetTest = SST("test")
+    
+    def validate(self, step, verbose=False):
+        # Compute the embeddings for all samples in the dataset
+        embeddings = []
+        labels = []
+        self.trainer.model.eval()
+        for sample, label in DataLoader(self.datasetTrain, batch_size=32):
+            sample = clip.tokenize(sample, truncate=True).to(self.device)
+            with torch.no_grad():
+                if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):
+                    text_features = self.trainer.model.module.encode_text(sample)
+                else:
+                    text_features = self.trainer.model.encode_text(sample)
+            embeddings.append(text_features)
+            labels.append(label)
+
+        # Train a linear classifier on top of the embeddings
+        embeddings = torch.cat(embeddings)
+        labels = torch.cat(labels)
+        classifier = LinearClassifier(embeddings.size(1), 2).to(self.device)
+        optimizer = torch.optim.Adam(classifier.parameters(), lr=1e-3)
+        criterion = nn.CrossEntropyLoss()
+        for epoch in range(10):
+            for i in range(0, len(embeddings), 32):
+                optimizer.zero_grad()
+                output = classifier(embeddings[i:i+32])
+                loss = criterion(output, labels[i:i+32])
+                loss.backward()
+                optimizer.step()
         
+        # Compute the accuracy on the test set
+        embeddings = []
+        labels = []
+        for sample, label in DataLoader(self.datasetTest, batch_size=32):
+            sample = clip.tokenize(sample, truncate=True).to(self.device)
+            with torch.no_grad():
+                if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):
+                    text_features = self.trainer.model.module.encode_text(sample)
+                else:
+                    text_features = self.trainer.model.encode_text(sample)
+            embeddings.append(text_features)
+            labels.append(label)
+        embeddings = torch.cat(embeddings)
+        labels = torch.cat(labels)
+        output = classifier(embeddings)
+        accuracy = (output.argmax(dim=1) == labels).float().mean()
+        print(f"Accuracy on SST-2: {accuracy:.2f}")
+        if self.writer is not None:
+            self.writer.add_scalar("Accuracy on SST-2", accuracy, step)

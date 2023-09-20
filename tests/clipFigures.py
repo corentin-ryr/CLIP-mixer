@@ -5,8 +5,8 @@ import numpy as np
 def clipFigures():
     top1Perf = [1.33, 0.63]
     top5Perf = [4.13, 2.03]
-    cosinePerf = [[0.562, 0.320, 0.441, 0.414, 0.367, 0.569], 0.4928]
-    cosinePerf = [np.mean(cosinePerf[0]), cosinePerf[1]]
+    cosinePerf = [[0.562, 0.320, 0.441, 0.414, 0.367, 0.569], [0.435, 0.451]]
+    cosinePerf = [np.mean(cosinePerf[0]), np.mean(cosinePerf[1])]
 
     # Print the relative improvement of Mixer over Transformer
     print("Relative improvement of Mixer over Transformer")
@@ -32,7 +32,6 @@ def clipFigures():
     plt.bar([0, 0.2], cosinePerf, color="blue", width=barWidth)
     plt.xticks([0, 0.2], ["Mixer", "Transformer"])
     plt.ylabel("Average SRCC")
-    plt.legend()
     plt.savefig("clipSTSCosine.png")
     plt.show()
 

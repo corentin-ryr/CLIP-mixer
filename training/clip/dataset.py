@@ -39,6 +39,24 @@ class STS(Dataset):
 
     def __len__(self):
         return self.stsDataset.num_rows
+    
+class SST(Dataset):
+    def __init__(self, selectedSplit) -> None:
+        super().__init__()
+        self.stsDataset = load_dataset("sst2")[selectedSplit]
+
+        self.datasetName = "sst2"
+
+    def __getitem__(self, index):
+        sample = self.stsDataset[index]
+        label = torch.tensor(float(sample["label"]))
+
+        data = sample["sentence"].lower().strip(), label
+        return data
+
+    def __len__(self):
+        return self.stsDataset.num_rows
+
 
 
 class LaionCoco(Dataset):
