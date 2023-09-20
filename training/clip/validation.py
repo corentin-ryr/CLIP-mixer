@@ -201,7 +201,7 @@ class CosineSimValidator():
         cosineSimilarities = []
         truth = []
 
-        for batch in DataLoader(dataset, batch_size=32):
+        for batch in tqdm(DataLoader(dataset, batch_size=32)):
             text1, text2, label = batch
             text1 = clip.tokenize(text1, truncate=True).to(self.device)
             text2 = clip.tokenize(text2, truncate=True).to(self.device)
