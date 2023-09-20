@@ -235,13 +235,13 @@ class CosineSimValidator():
 
         if self.writer:
             if step is not None:
-                self.writer.add_scalar("SRCC Linf", srcclinf.correlation, global_step=step)
-                self.writer.add_scalar("SRCC Cosine", srccCosine.correlation, global_step=step)
-                self.writer.add_scalar("PC Cosine", pcCosine.statistic, global_step=step)
+                self.writer.add_scalar(f"{dataset.datasetName}/SRCC Linf", srcclinf.correlation, global_step=step)
+                self.writer.add_scalar(f"{dataset.datasetName}/SRCC Cosine", srccCosine.correlation, global_step=step)
+                self.writer.add_scalar(f"{dataset.datasetName}/PC Cosine", pcCosine.statistic, global_step=step)
             else:
-                self.writer.add_text("SRCC Linf", str(srcclinf.correlation))
-                self.writer.add_text("SRCC Cosine", str(srccCosine.correlation))
-                self.writer.add_text("SRCC Cosine", str(pcCosine.statistic))
+                self.writer.add_text(f"{dataset.datasetName}/SRCC Linf", str(srcclinf.correlation))
+                self.writer.add_text(f"{dataset.datasetName}/SRCC Cosine", str(srccCosine.correlation))
+                self.writer.add_text(f"{dataset.datasetName}/SRCC Cosine", str(pcCosine.statistic))
 
         if verbose:
             print(f"Spearmen Ranking correlation coefficient Linf {srcclinf.correlation:.3f}")
@@ -270,7 +270,7 @@ class CosineSimValidator():
         ax.set_xlabel("L2 Distance between pair")
         ax.set_title("Distances for duplicate and non-duplicate pairs")
 
-        if self.writer and step is not None: self.writer.add_figure("neighborContinuousHistogramL2", fig, step)
+        if self.writer and step is not None: self.writer.add_figure(f"{dataset.datasetName}/neighborContinuousHistogramL2", fig, step)
         if verbose: plt.savefig("neighborContinuousHistogramL2.png")
 
         fig, ax = plt.subplots()
@@ -296,6 +296,6 @@ class CosineSimValidator():
         ax.set_xlabel("Cosine Distance between pair")
         ax.set_title("Distances for duplicate and non-duplicate pairs")
 
-        if self.writer and step is not None: self.writer.add_figure("neighborContinuousHistogramCosine", fig, step)
+        if self.writer and step is not None: self.writer.add_figure(f"{dataset.datasetName}/neighborContinuousHistogramCosine", fig, step)
         if verbose: plt.savefig("neighborContinuousHistogramCosine.png")
         

@@ -28,6 +28,8 @@ class STS(Dataset):
             self.stsDataset = self.stsDataset.rename_column("sentence2", "sentence_B")
             self.stsDataset = self.stsDataset.rename_column("score", "relatedness_score")
 
+        self.datasetName = selectedSet
+
     def __getitem__(self, index):
         sample = self.stsDataset[index]
         label = torch.tensor(float(sample["relatedness_score"]))

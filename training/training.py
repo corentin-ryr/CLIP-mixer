@@ -47,7 +47,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 2e-4
+        maxlr = 1e-4
         batch_size = 4096
 
         self.preprocess = preprocess
