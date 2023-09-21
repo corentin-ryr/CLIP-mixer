@@ -1,3 +1,4 @@
+import csv
 import logging
 import tarfile
 from torch.utils.data import Dataset
@@ -56,6 +57,24 @@ class SST(Dataset):
 
     def __len__(self):
         return self.stsDataset.num_rows
+    
+class MNIST(Dataset):
+    def __init__(self, selectedSplit, preprocess) -> None:
+        super().__init__()
+        self.stsDataset = load_dataset("mnist")[selectedSplit]
+
+        self.datasetName = "mnist"
+        self.preprocess = preprocess
+
+    def __getitem__(self, index):
+        sample = self.stsDataset[index]
+        label = torch.tensor(float(sample["label"]))
+
+        data = self.preprocess(sample["image"])
+        return data, label
+
+    def __len__(self):
+        return self.stsDataset.num_rows
 
 
 
@@ -85,6 +104,11 @@ class LaionCoco(Dataset):
 
         for captionKey in data:
             self.captionKey += captionKey
+        
+        with open("outputs/captionKey.txt", "w") as f:
+            spamWriter = csv.writer(f, delimiter="\t", quotechar="|", quoting=csv.QUOTE_MINIMAL)
+            spamWriter.writerows(self.captionKey)
+        del self.captionKey
 
         self.length = len(self.captionKey)
 

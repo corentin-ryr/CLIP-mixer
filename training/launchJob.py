@@ -56,12 +56,12 @@ command_to_run = "./generateDataset.sh ${{inputs.data_path}} ${{outputs.output}}
 
 
 # Preset CLIP test =======================================
-compute_target = "HighMemoryCPU"
+compute_target = "A100SingleGPU"
 
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "datasetUnziping"
+jobName = "validatorTest"
 
 dataset = datasets["laion-coco-images"]
 
@@ -76,24 +76,24 @@ command_to_run = (
 )
 
 # Preset CLIP full training =======================================
-compute_target = "A100MultiNodeNorth"
+# compute_target = "A100MultiNodeNorth"
 
-environment = "clipTraining"
+# environment = "clipTraining"
 
-exp_name = "clip"
-jobName = "clip_mixer_highlr"
+# exp_name = "clip"
+# jobName = "clip_mixer_largedataset"
 
-dataset = datasets["laion-coco-images"]
+# dataset = datasets["laion-coco-images"]
 
-command_to_run = (
-    f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
-    + (
-        " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
-        if computes[compute_target]["num_machine"] > 1
-        else ""
-    )
-    + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-mixer-highlr"
-)
+# command_to_run = (
+#     f"accelerate launch --mixed_precision fp16 --num_machines {computes[compute_target]['num_machine']} --num_processes {computes[compute_target]['num_process']}"
+#     + (
+#         " --machine_rank $NODE_RANK --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT"
+#         if computes[compute_target]["num_machine"] > 1
+#         else ""
+#     )
+#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-mixer-largedataset"
+# )
 
 # =========================================================================================== #
 

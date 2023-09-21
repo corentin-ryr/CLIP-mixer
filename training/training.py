@@ -14,7 +14,8 @@ from accelerate import Accelerator
 
 from clip import clip
 from clip.model import CLIP
-from clip.validation import ImageNetValidator, CosineSimValidator
+from clip.validation import ImageNetValidator, CosineSimValidator, MNISTValidator, SST2Validator
+from clip.dataset import LaionCoco, UnzipDataset
 
 from torch.utils.data import DataLoader
 
@@ -22,11 +23,10 @@ from argparse import ArgumentParser
 from tqdm import tqdm
 
 from azure.storage.blob import BlobServiceClient, ContainerClient
-from clip.dataset import LaionCoco, UnzipDataset
 
 class Trainer:
     # Init takes a clip model and a dataset
-    def __init__(self, model, preprocess, epochs, args):
+    def __init__(self, model, preprocess, epochs:int, args):
         self.runName = args.run_name
 
         # Create a Azure container client
@@ -47,7 +47,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 1e-4
+        maxlr = 5e-4
         batch_size = 4096
 
         self.preprocess = preprocess
@@ -67,7 +67,7 @@ class Trainer:
         dataset = LaionCoco(args.data_path, "/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True)
 
         self.trainLoader = DataLoader(
-            dataset, shuffle=False, batch_size=batch_size, num_workers=22, prefetch_factor=1, timeout=1800, drop_last=True
+            dataset, shuffle=True, batch_size=batch_size, num_workers=22, prefetch_factor=1, timeout=1800, drop_last=True
         )
 
         self.scheduler = CosineAnnealingWarmupRestarts(
@@ -77,6 +77,8 @@ class Trainer:
             min_lr=maxlr / 100,
             warmup_steps=2000 * self.accelerator.num_processes,
         )
+
+        self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
 
         self.model, self.optimizer, self.scheduler, self.trainLoader = self.accelerator.prepare(
             self.model, self.optimizer, self.scheduler, self.trainLoader
@@ -88,6 +90,9 @@ class Trainer:
             self.writer = SummaryWriter(log_dir="outputs/runs")
             self.imageNetValidator = ImageNetValidator(self, self.preprocess, self.accelerator.device, self.writer)
             self.cosineValidator = CosineSimValidator(self, self.accelerator.device, self.writer)
+            self.mnistValidator = MNISTValidator(self, self.preprocess, self.accelerator.device, self.writer)
+            self.sstValidator = SST2Validator(self, self.accelerator.device, self.writer)
+
 
         epoch, step = self.load_model()
         self.startEpoch = epoch
@@ -106,7 +111,7 @@ class Trainer:
 
         # add your own code to track the training progress.
         for epoch in range(self.startEpoch, self.epochs):
-            self.trainLoader.dataset.shuffle(epoch)
+            # self.trainLoader.dataset.shuffle(epoch)
 
             self.model.train()
             showFirstText = True
@@ -125,6 +130,7 @@ class Trainer:
                     ),
                     start=self.currentStep + 1,
                 ):
+                    self.optimizer.zero_grad()
                     if self.timeBenchmark: self.start.record()
 
                     global_step = epoch * self.numBatches + idx
@@ -161,7 +167,6 @@ class Trainer:
                         self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
 
                     self.optimizer.step()
-                    self.optimizer.zero_grad()
                     self.scheduler.step()
 
                     if idx > self.iterationPerEpoch:
@@ -199,6 +204,8 @@ class Trainer:
         if self.accelerator.is_local_main_process:
             self.imageNetValidator.validate(step, self.accelerator.is_local_main_process)
             self.cosineValidator.validate(step, self.accelerator.is_local_main_process)
+            self.mnistValidator.validate(step, self.accelerator.is_local_main_process)
+            self.sstValidator.validate(step, self.accelerator.is_local_main_process)
 
     def save_model(self, currentEpoch, currentStep, savePath=None):
         path = savePath if savePath else "outputs/checkpoints"
@@ -307,6 +314,8 @@ if __name__ == "__main__":
         useTransformer=False,
     )
     preprocess = clip._transform(model.visual.input_resolution)
+
+    torch.manual_seed(0)
 
 
     # dataset = UnzipDataset(args.data_path, args.image_path)

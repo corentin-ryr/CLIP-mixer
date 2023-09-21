@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn as nn
 
-from clip.dataset import STS, SST
+from clip.dataset import STS, SST, MNIST
 
 class ImageNetValidator():
     def __init__(self, trainer, preprocess, device, writer) -> None:
@@ -140,7 +140,10 @@ class ImageNetValidator():
     
 
     def validate(self, step, verbose=False):
-        self.trainer.model.eval()
+        if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):
+            self.trainer.model.module.eval()
+        else:
+            self.trainer.model.eval()
 
         self.zeroshot_weights = self.zeroshot_classifier(self.imagenet_classes, self.imagenet_templates)
 
@@ -201,7 +204,7 @@ class CosineSimValidator():
         cosineSimilarities = []
         truth = []
 
-        for batch in tqdm(DataLoader(dataset, batch_size=32)):
+        for batch in DataLoader(dataset, batch_size=32):
             text1, text2, label = batch
             text1 = clip.tokenize(text1, truncate=True).to(self.device)
             text2 = clip.tokenize(text2, truncate=True).to(self.device)
@@ -316,7 +319,7 @@ class SST2Validator():
         self.writer = writer
 
         self.datasetTrain = SST("train")
-        self.datasetTest = SST("test")
+        self.datasetTest = SST("validation")
     
     def validate(self, step, verbose=False):
         # Compute the embeddings for all samples in the dataset
@@ -335,7 +338,7 @@ class SST2Validator():
 
         # Train a linear classifier on top of the embeddings
         embeddings = torch.cat(embeddings)
-        labels = torch.cat(labels)
+        labels = torch.cat(labels).type(torch.LongTensor).to(self.device)
         classifier = LinearClassifier(embeddings.size(1), 2).to(self.device)
         optimizer = torch.optim.Adam(classifier.parameters(), lr=1e-3)
         criterion = nn.CrossEntropyLoss()
@@ -360,9 +363,167 @@ class SST2Validator():
             embeddings.append(text_features)
             labels.append(label)
         embeddings = torch.cat(embeddings)
-        labels = torch.cat(labels)
+        labels = torch.cat(labels).type(torch.LongTensor).to(self.device)
         output = classifier(embeddings)
-        accuracy = (output.argmax(dim=1) == labels).float().mean()
-        print(f"Accuracy on SST-2: {accuracy:.2f}")
+        accuracy = (output.argmax(dim=1) == labels).float().mean() * 100
+
+        if verbose: print(f"Accuracy on SST-2: {accuracy:.2f}%")
         if self.writer is not None:
             self.writer.add_scalar("Accuracy on SST-2", accuracy, step)
+
+
+class MNISTValidator():
+    def __init__(self, trainer, preprocess, device, writer) -> None:
+        self.imagenet_classes = ["zero", "one", "two", "three", "four", "five", "six", "sevem", "eight", "nine"]
+
+        self.imagenet_templates = [
+            'a bad photo of a {}.',
+            'a photo of many {}.',
+            'a sculpture of a {}.',
+            'a photo of the hard to see {}.',
+            'a low resolution photo of the {}.',
+            'a rendering of a {}.',
+            'graffiti of a {}.',
+            'a bad photo of the {}.',
+            'a cropped photo of the {}.',
+            'a tattoo of a {}.',
+            'the embroidered {}.',
+            'a photo of a hard to see {}.',
+            'a bright photo of a {}.',
+            'a photo of a clean {}.',
+            'a photo of a dirty {}.',
+            'a dark photo of the {}.',
+            'a drawing of a {}.',
+            'a photo of my {}.',
+            'the plastic {}.',
+            'a photo of the cool {}.',
+            'a close-up photo of a {}.',
+            'a black and white photo of the {}.',
+            'a painting of the {}.',
+            'a painting of a {}.',
+            'a pixelated photo of the {}.',
+            'a sculpture of the {}.',
+            'a bright photo of the {}.',
+            'a cropped photo of a {}.',
+            'a plastic {}.',
+            'a photo of the dirty {}.',
+            'a jpeg corrupted photo of a {}.',
+            'a blurry photo of the {}.',
+            'a photo of the {}.',
+            'a good photo of the {}.',
+            'a rendering of the {}.',
+            'a {} in a video game.',
+            'a photo of one {}.',
+            'a doodle of a {}.',
+            'a close-up photo of the {}.',
+            'a photo of a {}.',
+            'the origami {}.',
+            'the {} in a video game.',
+            'a sketch of a {}.',
+            'a doodle of the {}.',
+            'a origami {}.',
+            'a low resolution photo of a {}.',
+            'the toy {}.',
+            'a rendition of the {}.',
+            'a photo of the clean {}.',
+            'a photo of a large {}.',
+            'a rendition of a {}.',
+            'a photo of a nice {}.',
+            'a photo of a weird {}.',
+            'a blurry photo of a {}.',
+            'a cartoon {}.',
+            'art of a {}.',
+            'a sketch of the {}.',
+            'a embroidered {}.',
+            'a pixelated photo of a {}.',
+            'itap of the {}.',
+            'a jpeg corrupted photo of the {}.',
+            'a good photo of a {}.',
+            'a plushie {}.',
+            'a photo of the nice {}.',
+            'a photo of the small {}.',
+            'a photo of the weird {}.',
+            'the cartoon {}.',
+            'art of the {}.',
+            'a drawing of the {}.',
+            'a photo of the large {}.',
+            'a black and white photo of a {}.',
+            'the plushie {}.',
+            'a dark photo of a {}.',
+            'itap of a {}.',
+            'graffiti of the {}.',
+            'a toy {}.',
+            'itap of my {}.',
+            'a photo of a cool {}.',
+            'a photo of a small {}.',
+            'a tattoo of the {}.',
+        ]
+
+        self.trainer = trainer
+        self.device = device
+        self.writer = writer
+
+        dataset = MNIST("test", preprocess=preprocess)
+        self.loader = DataLoader(dataset, batch_size=32, num_workers=0)
+
+    def zeroshot_classifier(self, classnames, templates):
+        with torch.no_grad():
+            zeroshot_weights = []
+            for classname in tqdm(classnames, miniters=20, mininterval=50, desc="Computing ImageNet classes weights"):
+                texts = [template.format(classname) for template in templates] #format with class
+                texts = clip.tokenize(texts).to(self.device) #tokenize
+                if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):
+                    class_embeddings = self.trainer.model.module.encode_text(texts)
+                else:
+                    class_embeddings = self.trainer.model.encode_text(texts)
+                class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)
+                class_embedding = class_embeddings.mean(dim=0)
+                class_embedding /= class_embedding.norm()
+                zeroshot_weights.append(class_embedding)
+            zeroshot_weights = torch.stack(zeroshot_weights, dim=1).to(self.device)
+        return zeroshot_weights
+    
+    def accuracy(self, output, target, topk=(1,)):
+        pred = output.topk(max(topk), 1, True, True)[1].t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+        return [float(correct[:k].reshape(-1).float().sum(0, keepdim=True).cpu().numpy()) for k in topk]
+    
+
+    def validate(self, step, verbose=False):
+        if isinstance(self.trainer, nn.parallel.DistributedDataParallel):
+            self.trainer.model.module.eval()
+        else:
+            self.trainer.model.eval()
+
+        self.zeroshot_weights = self.zeroshot_classifier(self.imagenet_classes, self.imagenet_templates)
+
+        with torch.no_grad():
+            top1, top5, n = 0., 0., 0.
+            for i, (images, target) in enumerate(tqdm(self.loader, miniters=20, mininterval=50, desc="Image net validation")):
+                images = images.to(self.device)
+                target = target.to(self.device)
+                
+                # predict
+                if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):
+                    image_features = self.trainer.model.module.encode_image(images)
+                else:
+                    image_features = self.trainer.model.encode_image(images)
+                image_features /= image_features.norm(dim=-1, keepdim=True)
+                logits = 100. * image_features @ self.zeroshot_weights
+
+                # measure accuracy
+                acc1, acc5 = self.accuracy(logits, target, topk=(1, 5))
+                top1 += acc1
+                top5 += acc5
+                n += images.size(0)
+
+        top1 = (top1 / n) * 100
+        top5 = (top5 / n) * 100
+
+        if verbose:
+            print(f"Top-1 accuracy: {top1:.2f}%")
+            print(f"Top-5 accuracy: {top5:.2f}%")
+
+        if self.writer is not None:
+            self.writer.add_scalar("mnist/Top-1 accuracy", top1, step)
+            self.writer.add_scalar("mnist/Top-5 accuracy", top5, step)
