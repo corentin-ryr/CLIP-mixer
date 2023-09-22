@@ -1,5 +1,6 @@
 import csv
 import logging
+import sys
 import tarfile
 from torch.utils.data import Dataset
 from datasets import load_dataset
@@ -8,15 +9,35 @@ from braceexpand import braceexpand
 
 from fastparquet import ParquetFile
 from PIL import Image
-import random
 from multiprocessing import Pool
 import time
 import pandas as pd
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContainerClient
 from tqdm.contrib.concurrent import process_map
 from io import BytesIO
 
 logging.basicConfig(level=logging.WARNING)
+
+
+
+def _processPath(path, containerClient:ContainerClient):
+    try:
+        # Open the parquet file from the blob storage
+        stream = BytesIO()
+        containerClient.get_blob_client(f"UI/2023-08-11_082922_UTC/{path[:-4] + '.parquet'}").download_blob().readinto(stream)
+
+        # pf = ParquetFile(path[:-4] + ".parquet")
+        pf = pd.read_parquet(stream, columns=["caption", "key"], filters=[("status", "==", "success")])
+    except Exception as e:
+        print(f"Can't open parquet file {path} because {e}")
+        raise e
+    # pf:pd.DataFrame = pf.to_pandas(["caption", "key", "status"])
+    # pf = pf[pf["status"] == "success"]
+
+    # captionKey = list(zip(pf["caption"], pf["key"]))
+    return pf
+
+
 
 class STS(Dataset):
     def __init__(self, selectedSet) -> None:
@@ -83,7 +104,6 @@ class LaionCoco(Dataset):
         super().__init__()
 
         self.length = 0
-        self.captionKey = []
         self.images_path = images_path
         self.preprocess = preprocess
 
@@ -98,41 +118,27 @@ class LaionCoco(Dataset):
 
         # Use multiprocessing to open the parquet files in parellel
         # This is done because the parquet files are stored on a network drive and opening them sequentially is slow
+        self.containerClientParquet = blobService.get_container_client("azureml-blobstore-f6cf7981-35d0-479f-aa34-7f6fcca5d1a9")
+
         startTime = time.time()
         with Pool(32) as p:
-            data = p.map(self._processPath, list(braceexpand(data_path + files)), chunksize=128)
-
-        for captionKey in data:
-            self.captionKey += captionKey
+            data = p.starmap(_processPath, [(path, self.containerClientParquet) for path in list(braceexpand(data_path + files))], chunksize=128)
         
-        with open("outputs/captionKey.txt", "w") as f:
-            spamWriter = csv.writer(f, delimiter="\t", quotechar="|", quoting=csv.QUOTE_MINIMAL)
-            spamWriter.writerows(self.captionKey)
-        del self.captionKey
+        # data = []
+        # for path in braceexpand(data_path + files):
+        #     data.append(_processPath(path))
+        
+        self.captionKey = pd.concat(data)
 
-        self.length = len(self.captionKey)
+        self.length = self.captionKey.shape[0]
 
-        if verbose:
-            print(f"Time taken to init the dataset: {time.time() - startTime}")
+        print(self.captionKey.memory_usage())
 
-    def shuffle(self, seed):
-        # Shuffle the dataset
-        random.Random(seed * 42).shuffle(self.captionKey)
-
-    def _processPath(self, path):
-        try:
-            pf = ParquetFile(path[:-4] + ".parquet")
-        except Exception as e:
-            print(f"Can't open parquet file {path} because {e}")
-            raise e
-        pf: pd.DataFrame = pf.to_pandas(["caption", "key", "status"])
-        pf = pf[pf["status"] == "success"]
-
-        captionKey = list(zip(pf["caption"], pf["key"]))
-        return captionKey
+        if verbose: print(f"Time taken to init the dataset: {time.time() - startTime}")
 
     def __getitem__(self, index):
-        caption, key = self.captionKey[index]
+        line = self.captionKey.iloc[index]
+        caption, key = line["caption"], line["key"]
 
         stream = BytesIO()
         numberAttempts = 0
