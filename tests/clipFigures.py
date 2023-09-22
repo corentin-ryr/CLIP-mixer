@@ -5,7 +5,7 @@ import numpy as np
 def clipFigures():
     top1Perf = [1.33, 0.63]
     top5Perf = [4.13, 2.03]
-    cosinePerf = [[0.562, 0.320, 0.441, 0.414, 0.367, 0.569], [0.435, 0.451]]
+    cosinePerf = [[0.562, 0.320, 0.441, 0.414, 0.367, 0.569], [0.435, 0.451, 0.405, 0.363, 0.374]]
     cosinePerf = [np.mean(cosinePerf[0]), np.mean(cosinePerf[1])]
 
     # Print the relative improvement of Mixer over Transformer

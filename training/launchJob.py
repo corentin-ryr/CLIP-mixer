@@ -72,11 +72,11 @@ command_to_run = (
         if computes[compute_target]["num_machine"] > 1
         else ""
     )
-    + " training.py --data-path ${{inputs.data_path}} --image-path ${{inputs.image_path}} --epochs 500 --run-name clip-testtiming --verbose True"
+    + " training.py --image-path ${{inputs.image_path}} --epochs 500 --run-name clip-testtiming --verbose True"
 )
 
 # Preset CLIP full training =======================================
-# compute_target = "A100MultiNodeNorth"
+# compute_target = "A100MultiNode"
 
 # environment = "clipTraining"
 
@@ -92,7 +92,7 @@ command_to_run = (
 #         if computes[compute_target]["num_machine"] > 1
 #         else ""
 #     )
-#     + " training.py --data-path ${{inputs.data_path}}  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-mixer-largedataset"
+#     + " training.py  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-mixer-largedataset-highlr"
 # )
 
 # =========================================================================================== #
@@ -124,17 +124,7 @@ command_job = command(
     command=command_to_run,
     environment=f"{environment}@latest",
     inputs={
-        "data_path": Input(
-            type="uri_folder",
-            path=dataset,
-        ),
         "image_path": Input(type="uri_folder", path=datasets["unzip-laion"]),
-    },
-    outputs={
-        "output": Output(
-            type="uri_folder",
-            path="azureml://subscriptions/eac353b4-2d2e-45c7-a665-6e727a3f8de5/resourcegroups/MixER/workspaces/MachineLearning/datastores/workspaceblobstore/paths/UI/2023-08-11_082922_UTC/",
-        )
     },
     compute=computes[compute_target]["name"],
     experiment_name=exp_name,

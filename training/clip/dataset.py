@@ -7,7 +7,6 @@ from datasets import load_dataset
 import torch
 from braceexpand import braceexpand
 
-from fastparquet import ParquetFile
 from PIL import Image
 from multiprocessing import Pool
 import time
@@ -15,6 +14,7 @@ import pandas as pd
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from tqdm.contrib.concurrent import process_map
 from io import BytesIO
+from multiprocessing import Manager
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -22,21 +22,16 @@ logging.basicConfig(level=logging.WARNING)
 
 def _processPath(path, containerClient:ContainerClient):
     try:
-        # Open the parquet file from the blob storage
+        # Open the parquet file from the blob storage in the folder UI/2023-08-11_082922_UTC
         stream = BytesIO()
-        containerClient.get_blob_client(f"UI/2023-08-11_082922_UTC/{path[:-4] + '.parquet'}").download_blob().readinto(stream)
-
-        # pf = ParquetFile(path[:-4] + ".parquet")
+        containerClient.get_blob_client(f"UI/2023-08-11_082922_UTC{path[:-4] + '.parquet'}").download_blob().readinto(stream)
         pf = pd.read_parquet(stream, columns=["caption", "key"], filters=[("status", "==", "success")])
+        pf["key"] = pd.to_numeric(pf["key"], downcast='integer')
     except Exception as e:
-        print(f"Can't open parquet file {path} because {e}")
+        print(f"Can't open parquet file UI/2023-08-11_082922_UTC{path[:-4] + '.parquet'} because {e}")
         raise e
-    # pf:pd.DataFrame = pf.to_pandas(["caption", "key", "status"])
-    # pf = pf[pf["status"] == "success"]
 
-    # captionKey = list(zip(pf["caption"], pf["key"]))
     return pf
-
 
 
 class STS(Dataset):
@@ -100,7 +95,7 @@ class MNIST(Dataset):
 
 
 class LaionCoco(Dataset):
-    def __init__(self, data_path, files, images_path, preprocess, verbose=False) -> None:
+    def __init__(self, files, images_path, preprocess, verbose=False) -> None:
         super().__init__()
 
         self.length = 0
@@ -116,22 +111,15 @@ class LaionCoco(Dataset):
         if not self.containerClient.exists():
             self.containerClient.create_container()
 
-        # Use multiprocessing to open the parquet files in parellel
-        # This is done because the parquet files are stored on a network drive and opening them sequentially is slow
+        # Use multiprocessing to open the parquet files in parallel
         self.containerClientParquet = blobService.get_container_client("azureml-blobstore-f6cf7981-35d0-479f-aa34-7f6fcca5d1a9")
 
         startTime = time.time()
         with Pool(32) as p:
-            data = p.starmap(_processPath, [(path, self.containerClientParquet) for path in list(braceexpand(data_path + files))], chunksize=128)
+            data = p.starmap(_processPath, [(path, self.containerClientParquet) for path in list(braceexpand(files))], chunksize=128)
         
-        # data = []
-        # for path in braceexpand(data_path + files):
-        #     data.append(_processPath(path))
-        
-        self.captionKey = pd.concat(data)
-
+        self.captionKey = pd.concat(data).reset_index(drop=True)
         self.length = self.captionKey.shape[0]
-
         print(self.captionKey.memory_usage())
 
         if verbose: print(f"Time taken to init the dataset: {time.time() - startTime}")
@@ -139,6 +127,8 @@ class LaionCoco(Dataset):
     def __getitem__(self, index):
         line = self.captionKey.iloc[index]
         caption, key = line["caption"], line["key"]
+
+        key = str(key).zfill(9)
 
         stream = BytesIO()
         numberAttempts = 0
@@ -154,6 +144,9 @@ class LaionCoco(Dataset):
 
         with Image.open(stream) as image:
             image = self.preprocess(image)
+        
+        # print(image)
+        
         return image, caption
 
     def __len__(self):

@@ -188,7 +188,7 @@ class CosineSimValidator():
         self.device = device
         self.writer = writer
 
-        self.datasets = [STS(selectedSet=set) for set in ["sick", "mteb/sts16-sts", "mteb/sts15-sts", "mteb/sts14-sts", "mteb/sts13-sts", "mteb/sts12-sts"]]
+        self.datasets = [STS(selectedSet=set) for set in ["mteb/sts15-sts", "mteb/sts14-sts", "mteb/sts13-sts", "mteb/sts12-sts"]] #"sick", "mteb/sts16-sts", 
 
     def validate(self, step, verbose=False):
         for dataset in self.datasets:
@@ -374,9 +374,9 @@ class SST2Validator():
 
 class MNISTValidator():
     def __init__(self, trainer, preprocess, device, writer) -> None:
-        self.imagenet_classes = ["zero", "one", "two", "three", "four", "five", "six", "sevem", "eight", "nine"]
+        self.mnist_classes = ["zero", "one", "two", "three", "four", "five", "six", "sevem", "eight", "nine"]
 
-        self.imagenet_templates = [
+        self.mnist_templates = [
             'a bad photo of a {}.',
             'a photo of many {}.',
             'a sculpture of a {}.',
@@ -469,7 +469,7 @@ class MNISTValidator():
     def zeroshot_classifier(self, classnames, templates):
         with torch.no_grad():
             zeroshot_weights = []
-            for classname in tqdm(classnames, miniters=20, mininterval=50, desc="Computing ImageNet classes weights"):
+            for classname in tqdm(classnames, miniters=20, mininterval=50, desc="Computing MNIST classes weights"):
                 texts = [template.format(classname) for template in templates] #format with class
                 texts = clip.tokenize(texts).to(self.device) #tokenize
                 if isinstance(self.trainer.model, nn.parallel.DistributedDataParallel):
@@ -495,7 +495,7 @@ class MNISTValidator():
         else:
             self.trainer.model.eval()
 
-        self.zeroshot_weights = self.zeroshot_classifier(self.imagenet_classes, self.imagenet_templates)
+        self.zeroshot_weights = self.zeroshot_classifier(self.mnist_classes, self.mnist_templates)
 
         with torch.no_grad():
             top1, top5, n = 0., 0., 0.

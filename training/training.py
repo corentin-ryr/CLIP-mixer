@@ -23,6 +23,8 @@ from argparse import ArgumentParser
 from tqdm import tqdm
 
 from azure.storage.blob import BlobServiceClient, ContainerClient
+from torchvision.transforms import Normalize
+
 
 class Trainer:
     # Init takes a clip model and a dataset
@@ -59,12 +61,10 @@ class Trainer:
             self.timeList = []
 
 
-        dataset = LaionCoco(args.data_path, "/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True)
-
-        raise Exception
+        dataset = LaionCoco("/{00000..05000}.tar", args.image_path, preprocess=preprocess, verbose=True)
 
         self.trainLoader = DataLoader(
-            dataset, shuffle=True, batch_size=batch_size, num_workers=20, prefetch_factor=1, timeout=1800, drop_last=True
+            dataset, shuffle=True, batch_size=batch_size, drop_last=True #, num_workers=0, prefetch_factor=1, timeout=1800
         )
 
         self.accelerator = Accelerator(step_scheduler_with_optimizer=True)
@@ -106,6 +106,8 @@ class Trainer:
 
         self.accelerator.wait_for_everyone()
 
+        self.normalizer = Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+
 
     # Train function
     def train(self):
@@ -139,6 +141,8 @@ class Trainer:
                     global_step = epoch * self.numBatches + idx
 
                     images, texts = batch
+                    images = torch.tensor(images, device=self.accelerator.device, dtype=torch.float) / 256
+                    images = self.normalizer(images)
                     if  self.accelerator.is_local_main_process and showFirstText: 
                         print(texts[0])
                         showFirstText = False
@@ -246,7 +250,6 @@ class Trainer:
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument("--data-path", type=str, default="C:/Users/royc/Documents/DeduplicationSourceCode/Data/STS-b/laion-coco-images")
     parser.add_argument("--epochs", type=int, default=32)
     parser.add_argument("--image-path", type=str, default="")
     parser.add_argument("--run-name", type=str, default="")
