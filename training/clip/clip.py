@@ -74,7 +74,7 @@ def _download(url: str, root: str):
 
 
 def _convert_image_to_rgb(image:Image.Image):
-    return np.array(image.convert("RGB"))
+    return np.moveaxis(np.array(image.convert("RGB")), -1, 0)
 
 
 def _transform(n_px):

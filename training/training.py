@@ -49,7 +49,7 @@ class Trainer:
         self.iterationPerEpoch = float("inf")
         self.epochs = epochs
         self.model = model
-        maxlr = 5e-5
+        maxlr = 5e-4
         batch_size = 4096
 
         self.preprocess = preprocess
@@ -61,10 +61,10 @@ class Trainer:
             self.timeList = []
 
 
-        dataset = LaionCoco("/{00000..05000}.tar", args.image_path, preprocess=preprocess, verbose=True)
+        dataset = LaionCoco("/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True)
 
         self.trainLoader = DataLoader(
-            dataset, shuffle=True, batch_size=batch_size, drop_last=True #, num_workers=0, prefetch_factor=1, timeout=1800
+            dataset, shuffle=True, batch_size=batch_size, drop_last=True, num_workers=45, timeout=1800
         )
 
         self.accelerator = Accelerator(step_scheduler_with_optimizer=True)
@@ -141,8 +141,7 @@ class Trainer:
                     global_step = epoch * self.numBatches + idx
 
                     images, texts = batch
-                    images = torch.tensor(images, device=self.accelerator.device, dtype=torch.float) / 256
-                    images = self.normalizer(images)
+                    images = self.normalizer(images / 255)
                     if  self.accelerator.is_local_main_process and showFirstText: 
                         print(texts[0])
                         showFirstText = False
@@ -172,6 +171,8 @@ class Trainer:
                         self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
                     else:
                         self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
+                    if self.accelerator.sync_gradients:
+                        self.accelerator.clip_grad_norm_(self.model.parameters(), 1)
 
                     self.optimizer.step()
                     self.scheduler.step()

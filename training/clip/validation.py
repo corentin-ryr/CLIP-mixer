@@ -188,7 +188,7 @@ class CosineSimValidator():
         self.device = device
         self.writer = writer
 
-        self.datasets = [STS(selectedSet=set) for set in ["mteb/sts15-sts", "mteb/sts14-sts", "mteb/sts13-sts", "mteb/sts12-sts"]] #"sick", "mteb/sts16-sts", 
+        self.datasets = [STS(selectedSet=set) for set in ["sick", "mteb/sts16-sts", "mteb/sts15-sts", "mteb/sts14-sts", "mteb/sts13-sts", "mteb/sts12-sts"]] #
 
     def validate(self, step, verbose=False):
         for dataset in self.datasets:
