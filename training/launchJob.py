@@ -72,16 +72,16 @@ command_to_run = (
         if computes[compute_target]["num_machine"] > 1
         else ""
     )
-    + " training.py --image-path ${{inputs.image_path}} --epochs 500 --run-name clip-testtiming --verbose True"
+    + " training.py --image-path ${{inputs.image_path}} --epochs 2500 --run-name clip-overfitting --verbose True"
 )
 
 # Preset CLIP full training =======================================
-compute_target = "A100MultiNodeNorth"
+compute_target = "A100MultiNode"
 
 environment = "clipTraining"
 
 exp_name = "clip"
-jobName = "clip_mixer_largedataset_gradClip"
+jobName = "clip_mixer_largedataset"
 
 dataset = datasets["laion-coco-images"]
 
@@ -92,7 +92,7 @@ command_to_run = (
         if computes[compute_target]["num_machine"] > 1
         else ""
     )
-    + " training.py  --image-path ${{inputs.image_path}} --epochs 4 --run-name clip-mixer-largedataset-highlr"
+    + " training.py  --image-path ${{inputs.image_path}} --epochs 32 --run-name clip-mixer-longwarmup-adamw"
 )
 
 # =========================================================================================== #

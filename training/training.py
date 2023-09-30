@@ -1,5 +1,6 @@
 from distutils.util import strtobool
 import json
+import math
 from multiprocessing import Pool
 import os
 from matplotlib import pyplot as plt
@@ -8,6 +9,7 @@ import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.tensorboard import SummaryWriter
+# from clip.scheduler import CosineAnnealingWarmupRestarts
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 from accelerate import Accelerator
 
@@ -28,12 +30,12 @@ from torchvision.transforms import Normalize
 
 class Trainer:
     # Init takes a clip model and a dataset
-    def __init__(self, model, preprocess, epochs:int, args):
+    def __init__(self, model:nn.Module, preprocess, epochs:int, args):
         self.runName = args.run_name
 
         # Create a Azure container client
         blob_client = BlobServiceClient.from_connection_string(
-            conn_str="DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net",
+            conn_str=json.load(open("azureCredentials.json"))["connStringSaveStorage"],
             max_block_size=128 * 1024 * 1024,
             max_single_put_size=128 * 1024 * 1024,
         )
@@ -50,35 +52,41 @@ class Trainer:
         self.epochs = epochs
         self.model = model
         maxlr = 5e-4
-        batch_size = 4096
+        batch_size =  32768
 
         self.preprocess = preprocess
-
-        self.timeBenchmark = args.verbose
-        if self.timeBenchmark:
-            self.start = torch.cuda.Event(enable_timing=True)
-            self.end = torch.cuda.Event(enable_timing=True)
-            self.timeList = []
-
 
         dataset = LaionCoco("/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True)
 
         self.trainLoader = DataLoader(
-            dataset, shuffle=True, batch_size=batch_size, drop_last=True, num_workers=45, timeout=1800
+            dataset, shuffle=True, batch_size=batch_size, drop_last=True, num_workers=64, timeout=1800
         )
 
-        self.accelerator = Accelerator(step_scheduler_with_optimizer=True)
+        self.accelerator = Accelerator(step_scheduler_with_optimizer=True, split_batches=True)
 
-        self.optimizer = optim.Adam(
-            self.model.parameters(), lr=maxlr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2
-        )  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
+        exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
+        include = lambda n, p: not exclude(n, p)
+
+        named_parameters = list(self.model.named_parameters())
+        gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
+        rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
+
+        self.optimizer = optim.AdamW(
+            [
+                {"params": gain_or_bias_params, "weight_decay": 0.},
+                {"params": rest_params, "weight_decay": 0.2},
+            ],
+            lr=maxlr, 
+            betas=(0.9, 0.98), 
+            eps=1e-6
+        )
 
         self.scheduler = CosineAnnealingWarmupRestarts(
             self.optimizer,
             self.epochs * min(self.iterationPerEpoch, len(self.trainLoader)),
             max_lr=maxlr,
             min_lr=maxlr / 100,
-            warmup_steps=2000 * self.accelerator.num_processes,
+            warmup_steps=2000,
         )
 
         self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
@@ -122,7 +130,7 @@ class Trainer:
             showFirstText = True
 
             while self.currentStep < self.numBatches:
-                dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep + 1)
+                dataloader = self.accelerator.skip_first_batches(self.trainLoader, self.currentStep)
                 for idx, batch in enumerate(
                     tqdm(
                         dataloader,
@@ -131,12 +139,11 @@ class Trainer:
                         miniters=20,
                         mininterval=30,
                         desc=f"Epoch {epoch}",
-                        initial=self.currentStep + 1,
+                        initial=self.currentStep,
                     ),
-                    start=self.currentStep + 1,
+                    start=self.currentStep,
                 ):
                     self.optimizer.zero_grad()
-                    if self.timeBenchmark: self.start.record()
 
                     global_step = epoch * self.numBatches + idx
 
@@ -164,46 +171,42 @@ class Trainer:
 
                     self.accelerator.backward(total_loss)
 
-                    if self.timeBenchmark: self.end.record()
 
                     # Clamp logit scale to 100
                     if isinstance(self.model, nn.parallel.DistributedDataParallel):
-                        self.model.module.logit_scale.data = torch.clamp(self.model.module.logit_scale.data, max=100)
+                        with torch.no_grad():
+                            self.accelerator.unwrap_model(model).logit_scale.data.clamp_(0, math.log(100))
                     else:
                         self.model.logit_scale.data = torch.clamp(self.model.logit_scale.data, max=100)
+
                     if self.accelerator.sync_gradients:
-                        self.accelerator.clip_grad_norm_(self.model.parameters(), 1)
+                        gradientNormValue = self.accelerator.clip_grad_norm_(self.model.parameters(), 20)
+                        if self.accelerator.is_local_main_process: self.writer.add_scalar("Gradient norm", gradientNormValue, global_step=global_step)
 
                     self.optimizer.step()
                     self.scheduler.step()
 
-                    if idx > self.iterationPerEpoch:
-                        print("Reached iteration limit")
-                        break
 
                     if self.accelerator.is_local_main_process:
                         self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
                         self.writer.add_scalar("Loss", total_loss.item(), global_step=global_step)
 
-                    if self.timeBenchmark and idx > 50 and idx < 350:
-                        torch.cuda.synchronize()
-                        self.timeList.append(self.start.elapsed_time(self.end))
-                    
-                    self.currentStep = idx
+                    if idx > self.iterationPerEpoch:
+                        print("Reached iteration limit")
+                        break
+
+                    self.currentStep = idx + 1
                     if global_step % 400 == 399: break
                 else:
                     break
-                if self.timeBenchmark: print(f"Average step time: {sum(self.timeList) / len(self.timeList)}")
 
 
-                self.save_model(currentEpoch=epoch, currentStep=idx)
+                self.save_model(currentEpoch=epoch, currentStep=self.currentStep)
                 self.validate(global_step)
                 self.accelerator.wait_for_everyone()
                 showFirstText = True
 
             self.currentStep = 0
-
-            if epoch == 3: break
         
         self.validate(global_step)
 
@@ -264,43 +267,6 @@ def _uploadBlob(path, file, container_client: ContainerClient):
         data = data.read()
         blobClient = container_client.upload_blob(name=file, data=data, overwrite=True)
     del data, blobClient
-
-
-def plot_grad_flow(named_parameters):
-    """Plots the gradients flowing through different layers in the net during training.
-    Can be used for checking for possible gradient vanishing / exploding problems.
-
-    Usage: Plug this function in Trainer class after loss.backwards() as
-    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow"""
-    ave_grads = []
-    max_grads = []
-    layers = []
-    for n, p in named_parameters:
-        if (p.requires_grad) and ("bias" not in n):
-            layers.append(n)
-            ave_grads.append(p.grad.abs().cpu().mean())
-            max_grads.append(p.grad.abs().cpu().max())
-
-    fig, ax = plt.subplots(figsize=(20, 10))
-
-    ax.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
-    ax.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
-    ax.hlines(0, 0, len(ave_grads) + 1, lw=2, color="k")
-    ax.set_xticks(range(0, len(ave_grads), 1), layers, rotation="vertical")
-    ax.set_xlim(left=0, right=len(ave_grads))
-    ax.set_ylim(bottom=-0.001, top=0.02)  # zoom in on the lower gradient regions
-    ax.set_xlabel("Layers")
-    ax.set_ylabel("average gradient")
-    ax.set_title("Gradient flow")
-    ax.grid(True)
-    ax.legend(
-        [Line2D([0], [0], color="c", lw=4), Line2D([0], [0], color="b", lw=4), Line2D([0], [0], color="k", lw=4)],
-        ["max-gradient", "mean-gradient", "zero-gradient"],
-    )
-
-    print(max(max_grads), max(ave_grads))
-
-    return ax
 
 
 if __name__ == "__main__":

@@ -230,7 +230,7 @@ class Transformer(nn.Module):
         self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
-        return checkpoint_sequential(self.resblocks, segments=4, input=x)
+        return checkpoint_sequential(self.resblocks, segments=6, input=x)
 
 
 class Mixer(nn.Module):
@@ -241,7 +241,7 @@ class Mixer(nn.Module):
         self.mixBlocks = nn.Sequential(*[MixerBlock(width, context) for _ in range(layers)])
 
     def forward(self, x: torch.Tensor):
-        return checkpoint_sequential(self.mixBlocks, segments=4, input=x)
+        return checkpoint_sequential(self.mixBlocks, segments=6, input=x)
 
 
 class VisionTransformer(nn.Module):

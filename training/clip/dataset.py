@@ -1,6 +1,4 @@
-import csv
 import logging
-import sys
 import tarfile
 from torch.utils.data import Dataset
 from datasets import load_dataset
@@ -14,19 +12,18 @@ import pandas as pd
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from tqdm.contrib.concurrent import process_map
 from io import BytesIO
-from multiprocessing import Manager
+import json
 
 logging.basicConfig(level=logging.WARNING)
 
 
-
-def _processPath(path, containerClient:ContainerClient):
+def _processPath(path, containerClient: ContainerClient):
     try:
         # Open the parquet file from the blob storage in the folder UI/2023-08-11_082922_UTC
         stream = BytesIO()
-        containerClient.get_blob_client(f"UI/2023-08-11_082922_UTC{path[:-4] + '.parquet'}").download_blob().readinto(stream)
+        containerClient.get_blob_client(f"UI/2023-08-11_082922_UTC{path[:-4] + '.parquet'}").download_blob(timeout=600).readinto(stream)
         pf = pd.read_parquet(stream, columns=["caption", "key"], filters=[("status", "==", "success")])
-        pf["key"] = pd.to_numeric(pf["key"], downcast='integer')
+        pf["key"] = pd.to_numeric(pf["key"], downcast="integer")
     except Exception as e:
         print(f"Can't open parquet file UI/2023-08-11_082922_UTC{path[:-4] + '.parquet'} because {e}")
         raise e
@@ -56,7 +53,8 @@ class STS(Dataset):
 
     def __len__(self):
         return self.stsDataset.num_rows
-    
+
+
 class SST(Dataset):
     def __init__(self, selectedSplit) -> None:
         super().__init__()
@@ -73,7 +71,8 @@ class SST(Dataset):
 
     def __len__(self):
         return self.stsDataset.num_rows
-    
+
+
 class MNIST(Dataset):
     def __init__(self, selectedSplit, preprocess) -> None:
         super().__init__()
@@ -93,18 +92,16 @@ class MNIST(Dataset):
         return self.stsDataset.num_rows
 
 
-
 class LaionCoco(Dataset):
-    def __init__(self, files, images_path, preprocess, verbose=False) -> None:
+    def __init__(self, files, images_path, preprocess, verbose=False, limit: int = None) -> None:
         super().__init__()
 
         self.length = 0
         self.images_path = images_path
         self.preprocess = preprocess
+        self.limit = limit
 
-        blobService = BlobServiceClient.from_connection_string(
-            "DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net"
-        )
+        blobService = BlobServiceClient.from_connection_string(json.load(open("azureCredentials.json"))["connectionStringSaveStorage"])
 
         # Check if container exists and create it otherwise
         self.containerClient = blobService.get_container_client("laion-coco-unzip")
@@ -117,12 +114,15 @@ class LaionCoco(Dataset):
         startTime = time.time()
         with Pool(32) as p:
             data = p.starmap(_processPath, [(path, self.containerClientParquet) for path in list(braceexpand(files))], chunksize=128)
-        
+
         self.captionKey = pd.concat(data).reset_index(drop=True)
         self.length = self.captionKey.shape[0]
         print(self.captionKey.memory_usage())
 
-        if verbose: print(f"Time taken to init the dataset: {time.time() - startTime}")
+        if verbose:
+            print(f"Time taken to init the dataset: {time.time() - startTime}")
+
+        self.cacheMap = {}
 
     def __getitem__(self, index):
         line = self.captionKey.iloc[index]
@@ -144,13 +144,11 @@ class LaionCoco(Dataset):
 
         with Image.open(stream) as image:
             image = self.preprocess(image)
-        
-        # print(image)
-        
+
         return image, caption
 
     def __len__(self):
-        return self.length
+        return self.length if self.limit is None else self.limit
 
 
 class UnzipDataset:
@@ -159,9 +157,7 @@ class UnzipDataset:
         self.path = path
         self.imagePath = imagePath
 
-        blobService = BlobServiceClient.from_connection_string(
-            "DefaultEndpointsProtocol=https;AccountName=machinelearnin8258572776;AccountKey=cGUVN9SjtlwfBjZ8Z5yl3DN/P+pXNlZwbs4AP4lT1JX781pGOfWU/GkUp7BwMD+YFpec3lXbZc5d+AStsmXLLw==;EndpointSuffix=core.windows.net"
-        )
+        blobService = BlobServiceClient.from_connection_string(json.load(open("azureCredentials.json"))["connStringDataset"])
 
         # Check if container exists and create it otherwise
         self.containerClient = blobService.get_container_client("laion-coco-unzip")
@@ -170,7 +166,6 @@ class UnzipDataset:
 
     def unzipDataset(self, tarFiles):  # tarFiles is a string in the form of {0..9}.tar
         braceString = list(braceexpand(self.path + tarFiles))
-        # self._unzipTar(braceString[0])
         process_map(self._unzipTar, braceString, max_workers=64, chunksize=4)
 
     def _unzipTar(self, tarPath):
@@ -193,6 +188,7 @@ class UnzipDataset:
                     print(f"Impossible to unzip {tarPath} because {e}.")
         except Exception as e:
             print(f"Can't unzip shard {tarPath} because {e}")
+
 
 if __name__ == "__main__":
     # dataset = LaionCoco("/mnt/laion-coco/", "{0..9}.tar", "/mnt/laion-coco-unzip/", None, verbose=True)
