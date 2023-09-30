@@ -1,15 +1,11 @@
 from distutils.util import strtobool
 import json
 import math
-from multiprocessing import Pool
 import os
-from matplotlib import pyplot as plt
-from matplotlib.lines import Line2D
-import numpy as np
+
 import torch
 from torch import nn, optim
 from torch.utils.tensorboard import SummaryWriter
-# from clip.scheduler import CosineAnnealingWarmupRestarts
 from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 from accelerate import Accelerator
 
