@@ -223,25 +223,30 @@ class MixerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None):
+    def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None, useGradCheckpointing:bool=False):
         super().__init__()
         self.width = width
         self.layers = layers
         self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
+        self.useGradCheckpointing = useGradCheckpointing
+
 
     def forward(self, x: torch.Tensor):
-        return checkpoint_sequential(self.resblocks, segments=6, input=x)
+        if self.useGradCheckpointing: return checkpoint_sequential(self.resblocks, segments=6, input=x)
+        else: return self.resblocks(x)
 
 
 class Mixer(nn.Module):
-    def __init__(self, width: int, layers: int, context: int) -> None:
+    def __init__(self, width: int, layers: int, context: int, useGradCheckpointing:bool=False) -> None:
         super().__init__()
         self.width = width
         self.layers = layers
         self.mixBlocks = nn.Sequential(*[MixerBlock(width, context) for _ in range(layers)])
+        self.useGradCheckpointing = useGradCheckpointing
 
     def forward(self, x: torch.Tensor):
-        return checkpoint_sequential(self.mixBlocks, segments=6, input=x)
+        if self.useGradCheckpointing: return checkpoint_sequential(self.mixBlocks, segments=6, input=x)
+        else: return self.mixBlocks(x)
 
 
 class VisionTransformer(nn.Module):
@@ -405,7 +410,7 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image.type(self.dtype))
 
-    def encode_text(self, text):
+    def encode_text(self, text:torch.Tensor):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
 
         if self.useTransformer: x = x + self.positional_embedding.type(self.dtype)
@@ -416,7 +421,7 @@ class CLIP(nn.Module):
 
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
-        x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
+        x = x[torch.arange(x.shape[0], device=text.device), text.argmax(dim=-1)] @ self.text_projection
 
         return x
 

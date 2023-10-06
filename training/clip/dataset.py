@@ -93,15 +93,14 @@ class MNIST(Dataset):
 
 
 class LaionCoco(Dataset):
-    def __init__(self, files, images_path, preprocess, verbose=False, limit: int = None) -> None:
+    def __init__(self, files, preprocess, verbose=False, limit: int = None) -> None:
         super().__init__()
 
         self.length = 0
-        self.images_path = images_path
         self.preprocess = preprocess
         self.limit = limit
 
-        blobService = BlobServiceClient.from_connection_string(json.load(open("azureCredentials.json"))["connectionStringSaveStorage"])
+        blobService = BlobServiceClient.from_connection_string(json.load(open("azureCredentials.json"))["connStringDataset"])
 
         # Check if container exists and create it otherwise
         self.containerClient = blobService.get_container_client("laion-coco-unzip")
@@ -191,13 +190,16 @@ class UnzipDataset:
 
 
 if __name__ == "__main__":
-    # dataset = LaionCoco("/mnt/laion-coco/", "{0..9}.tar", "/mnt/laion-coco-unzip/", None, verbose=True)
-    # print(len(dataset))
-    # print(dataset[0])
+    from training.clip import clip
+    preprocess = clip._transform(224)
+    dataset = LaionCoco("/{00000..35000}.tar", preprocess=preprocess, verbose=True)
+    print(len(dataset))
+    sample = dataset[0]
+    print(sample[0].shape)
 
     # dataset = STS()
     # print(len(dataset))
     # print(dataset[0])
 
-    dataset = UnzipDataset("/mnt/laion-coco/", "/mnt/laion-coco-unzip/")
-    dataset.unzipDataset("{0..9}.tar")
+    # dataset = UnzipDataset("/mnt/laion-coco/", "/mnt/laion-coco-unzip/")
+    # dataset.unzipDataset("{0..9}.tar")

@@ -2,6 +2,7 @@ from distutils.util import strtobool
 import json
 import math
 import os
+import pandas as pd
 
 import torch
 from torch import nn, optim
@@ -23,24 +24,28 @@ from tqdm import tqdm
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from torchvision.transforms import Normalize
 
+import time
+
 
 class Trainer:
     # Init takes a clip model and a dataset
-    def __init__(self, model:nn.Module, preprocess, epochs:int, args):
+    def __init__(self, model: nn.Module, preprocess, epochs: int, args):
         self.runName = args.run_name
+        self.saveToBlob = args.save_to_blob
 
         # Create a Azure container client
-        blob_client = BlobServiceClient.from_connection_string(
-            conn_str=json.load(open("azureCredentials.json"))["connStringSaveStorage"],
-            max_block_size=128 * 1024 * 1024,
-            max_single_put_size=128 * 1024 * 1024,
-        )
-        # Get the container or cretae it if it does not exist
-        self.container_client = blob_client.get_container_client(self.runName)
-        try:
-            self.container_client.create_container()
-        except:
-            pass
+        if self.saveToBlob:
+            blob_client = BlobServiceClient.from_connection_string(
+                conn_str=json.load(open("azureCredentials.json"))["connStringSaveStorage"],
+                max_block_size=128 * 1024 * 1024,
+                max_single_put_size=128 * 1024 * 1024,
+            )
+            # Get the container or cretae it if it does not exist
+            self.container_client = blob_client.get_container_client(self.runName)
+            try:
+                self.container_client.create_container()
+            except:
+                pass
 
         os.makedirs("outputs/checkpoints", exist_ok=True)
 
@@ -48,19 +53,17 @@ class Trainer:
         self.epochs = epochs
         self.model = model
         maxlr = 5e-4
-        batch_size =  32768
+        batch_size = 32768
 
         self.preprocess = preprocess
 
-        dataset = LaionCoco("/{00000..35000}.tar", args.image_path, preprocess=preprocess, verbose=True)
+        dataset = LaionCoco("/{00000..35000}.tar", preprocess=preprocess, verbose=True)
 
-        self.trainLoader = DataLoader(
-            dataset, shuffle=True, batch_size=batch_size, drop_last=True, num_workers=64, timeout=1800
-        )
+        self.trainLoader = DataLoader(dataset, shuffle=True, batch_size=batch_size, drop_last=True, num_workers=64, timeout=1800)
 
         self.accelerator = Accelerator(step_scheduler_with_optimizer=True, split_batches=True)
 
-        exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
+        exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or "logit_scale" in n
         include = lambda n, p: not exclude(n, p)
 
         named_parameters = list(self.model.named_parameters())
@@ -69,12 +72,12 @@ class Trainer:
 
         self.optimizer = optim.AdamW(
             [
-                {"params": gain_or_bias_params, "weight_decay": 0.},
+                {"params": gain_or_bias_params, "weight_decay": 0.0},
                 {"params": rest_params, "weight_decay": 0.2},
             ],
-            lr=maxlr, 
-            betas=(0.9, 0.98), 
-            eps=1e-6
+            lr=maxlr,
+            betas=(0.9, 0.98),
+            eps=1e-6,
         )
 
         self.scheduler = CosineAnnealingWarmupRestarts(
@@ -82,7 +85,7 @@ class Trainer:
             self.epochs * min(self.iterationPerEpoch, len(self.trainLoader)),
             max_lr=maxlr,
             min_lr=maxlr / 100,
-            warmup_steps=2000,
+            warmup_steps=2,
         )
 
         self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
@@ -99,7 +102,6 @@ class Trainer:
             self.cosineValidator = CosineSimValidator(self, self.accelerator.device, self.writer)
             self.mnistValidator = MNISTValidator(self, self.preprocess, self.accelerator.device, self.writer)
             self.sstValidator = SST2Validator(self, self.accelerator.device, self.writer)
-
 
         epoch, step = self.load_model()
         self.startEpoch = epoch
@@ -145,7 +147,7 @@ class Trainer:
 
                     images, texts = batch
                     images = self.normalizer(images / 255)
-                    if  self.accelerator.is_local_main_process and showFirstText: 
+                    if self.accelerator.is_local_main_process and showFirstText:
                         print(texts[0])
                         showFirstText = False
 
@@ -160,9 +162,9 @@ class Trainer:
                     logits_per_text = logit_scale * text_features @ image_features_gathered.t()
                     logits_per_image = logit_scale * image_features @ text_features_gathered.t()
 
-                    ground_truth = torch.arange(len(image_features), dtype=torch.long).to(self.accelerator.device) + self.accelerator.process_index * len(
-                        image_features
-                    )
+                    ground_truth = torch.arange(
+                        len(image_features), dtype=torch.long, device=self.accelerator.device
+                    ) + self.accelerator.process_index * len(image_features)
                     total_loss = (loss_img(logits_per_image, ground_truth) + loss_txt(logits_per_text, ground_truth)) / 2
 
                     self.accelerator.backward(total_loss)
@@ -177,11 +179,11 @@ class Trainer:
 
                     if self.accelerator.sync_gradients:
                         gradientNormValue = self.accelerator.clip_grad_norm_(self.model.parameters(), 20)
-                        if self.accelerator.is_local_main_process: self.writer.add_scalar("Gradient norm", gradientNormValue, global_step=global_step)
+                        if self.accelerator.is_local_main_process:
+                            self.writer.add_scalar("Gradient norm", gradientNormValue, global_step=global_step)
 
                     self.optimizer.step()
                     self.scheduler.step()
-
 
                     if self.accelerator.is_local_main_process:
                         self.writer.add_scalar("Learning rate", self.scheduler.get_lr()[0], global_step=global_step)
@@ -192,10 +194,10 @@ class Trainer:
                         break
 
                     self.currentStep = idx + 1
-                    if global_step % 400 == 399: break
+                    if global_step % 400 == 399:
+                        break
                 else:
                     break
-
 
                 self.save_model(currentEpoch=epoch, currentStep=self.currentStep)
                 self.validate(global_step)
@@ -203,9 +205,8 @@ class Trainer:
                 showFirstText = True
 
             self.currentStep = 0
-        
-        self.validate(global_step)
 
+        self.validate(global_step)
 
     def validate(self, step):
         if self.accelerator.is_local_main_process:
@@ -218,7 +219,7 @@ class Trainer:
         path = savePath if savePath else "outputs/checkpoints"
         self.accelerator.save_state(path)
 
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and self.saveToBlob:
             json.dump({"epoch": currentEpoch, "step": currentStep}, open(os.path.join(path, "epoch.json"), "w"))
 
             # Upload the outputs/checkpoints folder to Azure
@@ -229,11 +230,12 @@ class Trainer:
 
     def load_model(self):
         # Download the outputs/checkpoints folder from Azure
-        if self.accelerator.is_local_main_process:
-            for blob in self.container_client.list_blobs():
-                with open(os.path.join("outputs/checkpoints", blob.name), "wb") as data:
-                    self.container_client.get_blob_client(blob.name).download_blob().readinto(data)
-        self.accelerator.wait_for_everyone()
+        if self.saveToBlob:
+            if self.accelerator.is_local_main_process:
+                for blob in self.container_client.list_blobs():
+                    with open(os.path.join("outputs/checkpoints", blob.name), "wb") as data:
+                        self.container_client.get_blob_client(blob.name).download_blob().readinto(data)
+            self.accelerator.wait_for_everyone()
 
         try:
             if self.accelerator.is_local_main_process:
@@ -253,7 +255,8 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=32)
     parser.add_argument("--image-path", type=str, default="")
     parser.add_argument("--run-name", type=str, default="")
-    parser.add_argument("--verbose", type=lambda x:bool(strtobool(x)), default=False)
+    parser.add_argument("--verbose", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--save-to-blob", type=lambda x: bool(strtobool(x)), default=False)
     return parser.parse_args()
 
 
@@ -289,4 +292,3 @@ if __name__ == "__main__":
     trainer = Trainer(model, preprocess, epochs=args.epochs, args=args)
 
     trainer.train()
-
