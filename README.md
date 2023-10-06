@@ -19,20 +19,10 @@ We trained two models on a cluster of 8 A100 GPUs. We trained with the same para
 
 We benchmarked on STS tasks (we averaged the performance on 6 benchmark datasets) to measure the performance of the text encoder and on the ImageNet classification task to test the zero-shot performance of the complete models.
 
-<div style="display: flex; justify-content: space-around;">
-    <div style="flex: 1;">
-        <figure>
-            <img src="clipImagenet.png" alt="Figure 1">
-            <figcaption>Figure 1: Performance of the Mixer and Transformer based models on the zero-shot classification task.</figcaption>
-        </figure>
-    </div>
-    <div style="flex: 1;">
-        <figure>
-            <img src="clipSTSCosine.png" alt="Figure 2">
-            <figcaption>Figure 2: Performance on the STS tasks.</figcaption>
-        </figure>
-    </div>
-</div>
+
+| ![clipImageNet](clipImagenet.png) Figure 1: Mixer vs Transformer models on the zero-shot classification task. | ![clipSTSCosine](clipSTSCosine.png) Figure 2: Mixer vs Transformer models on the STS tasks (average of 6 datasets). |
+|:---:|:---:|
+
 
 
 ## Usage
