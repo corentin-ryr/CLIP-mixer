@@ -1,6 +1,6 @@
 # CLIP
 
-CLIP (Contrastive Language-Image Pre-Training) is a neural network trained on a variety of (image, text) pairs. It can be instructed in natural language to predict the most relevant text snippet, given an image, without directly optimizing for the task, similarly to the zero-shot capabilities of GPT-2 and 3. We found CLIP matches the performance of the original ResNet50 on ImageNet “zero-shot” without using any of the original 1.28M labeled examples, overcoming several major challenges in computer vision.
+CLIP (Contrastive Language-Image Pre-Training) is a neural network trained on a variety of (image, text) pairs. It can be instructed in natural language to predict the most relevant text snippet, given an image, without directly optimizing for the task, similar to the zero-shot capabilities of GPT-2 and 3. We found CLIP matches the performance of the original ResNet50 on ImageNet “zero-shot” without using any of the original 1.28M labeled examples, overcoming several major challenges in computer vision.
 
 
 
@@ -8,14 +8,15 @@ CLIP (Contrastive Language-Image Pre-Training) is a neural network trained on a 
 
 ![CLIP](CLIP.png)
 
-The encoders in the original paper are vision Transformers or ResNets. In this project we tried encoders built with the Mixer architecture. The overall training scheme (loss, optimizer, scheduler and hyperparameters) is the same except for the dataset which is a subset of [Laion Coco](https://laion.ai/blog/laion-coco/) of 200M samples (instead of the 400M samples in the original paper).
+The encoders in the original paper are vision Transformers or ResNets. In this project, we tried encoders built with the Mixer architecture. The overall training scheme (loss, optimizer, scheduler, and hyperparameters) is the same except for the dataset which is a subset of [Laion Coco](https://laion.ai/blog/laion-coco/) of 200M samples (instead of the 400M samples in the original paper).
 
-The Mixer is a modified Transformer where the self-attention layer is replaced with a MLP block that applies on the transposed input
+The Mixer is a modified Transformer where the self-attention layer is replaced with an MLP block that applies to the transposed input
 ![Mixer](mixer-architecture.png)
 
 ## Results
 
 We trained two models on a cluster of 8 A100 GPUs. We trained with the same parameters as in the original CLIP paper except for the dataset size which is limited to 200 million samples. We also stopped the training after 16k steps.
+The Transformer-based model has 151 million parameters while the Mixer one has 111 million (a 36% increase) and they compare similarly on the STS task while the Mixer model outperforms the Transformer on the ImageNet task. The Mixer model was also roughly 25% faster to train.
 
 We benchmarked on STS tasks (we averaged the performance on 6 benchmark datasets) to measure the performance of the text encoder and on the ImageNet classification task to test the zero-shot performance of the complete models.
 
